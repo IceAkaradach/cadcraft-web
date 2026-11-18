@@ -144,6 +144,14 @@ pub struct CanvasState {
     pub show_platform_picker: bool,
     /// Whether to remember choice and auto-enter workspace directly on next visit.
     pub auto_enter_workspace: bool,
+    /// Whether to show the Phone mobile tools bottom sheet modal.
+    pub show_mobile_tools_sheet: bool,
+    /// Whether to show the Tablet slide-over tools drawer.
+    pub show_tablet_tools_drawer: bool,
+    /// Whether to show the Tablet slide-over layers drawer.
+    pub show_tablet_layers_drawer: bool,
+    /// Whether to show the Tablet slide-over properties drawer.
+    pub show_tablet_props_drawer: bool,
 }
 
 /// Device experience mode for customized UI layout and touch/mouse logic.
@@ -151,8 +159,8 @@ pub struct CanvasState {
 #[serde(rename_all = "lowercase")]
 pub enum DeviceMode {
     Phone,
-    #[default]
     Tablet,
+    #[default]
     Desktop,
 }
 
@@ -2056,6 +2064,30 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     viewport_controls(app, ui, rect);
     viewport_navigation_bar(app, ui, rect);
     pen_drag_keypad(app, ui, rect);
+
+    // Platform-specific overlays and interactive tools
+    match app.canvas.device_mode {
+        DeviceMode::Phone => {
+            mobile_bottom_bar(app, ui, rect);
+            if app.canvas.show_mobile_tools_sheet {
+                mobile_tools_sheet(app, ui, rect);
+            }
+        }
+        DeviceMode::Tablet => {
+            tablet_pencil_palette(app, ui, rect);
+            tablet_osnap_chips(app, ui, rect);
+            if app.canvas.show_tablet_tools_drawer {
+                tablet_tools_drawer(app, ui, rect);
+            }
+            if app.canvas.show_tablet_layers_drawer {
+                tablet_layers_drawer(app, ui, rect);
+            }
+            if app.canvas.show_tablet_props_drawer {
+                tablet_props_drawer(app, ui, rect);
+            }
+        }
+        DeviceMode::Desktop => {}
+    }
     // Typing and Escape reach the command line even when its overlay is hidden.
     crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
@@ -2987,6 +3019,449 @@ fn append_num(state: &mut PenDragState, s: &str) {
         state.is_first_digit = false;
     }
     state.distance_input.push_str(s);
+}
+
+fn mobile_bottom_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let bar_h = 48.0;
+    let bar_rect = Rect::from_min_size(pos2(rect.left(), rect.bottom() - bar_h), vec2(rect.width(), bar_h));
+
+    egui::Area::new(egui::Id::new("phone_bottom_bar_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(bar_rect.min)
+        .show(ui.ctx(), |ui| {
+            ui.set_width(bar_rect.width());
+            ui.set_height(bar_rect.height());
+
+            let bg = Color32::from_rgba_premultiplied(16, 20, 28, 245);
+            let stroke = Stroke::new(1.0, Color32::from_white_alpha(35));
+
+            egui::Frame::NONE
+                .fill(bg)
+                .stroke(stroke)
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let btn_w = ((bar_rect.width() - 36.0) / 4.0).clamp(55.0, 110.0);
+                        let btn_h = 32.0;
+
+                        // 1. Pan / Draw Toggle
+                        let is_pan = app.canvas.touch_nav_mode == TouchNavMode::Pan;
+                        let (pan_label, pan_icon) = if is_pan {
+                            ("✋ Pan", Color32::from_rgb(0, 190, 255))
+                        } else {
+                            ("✏️ Draw", Color32::from_rgb(0, 230, 140))
+                        };
+                        let pan_btn = egui::Button::new(
+                            RichText::new(pan_label)
+                                .font(egui::FontId::proportional(12.5))
+                                .strong()
+                                .color(pan_icon),
+                        )
+                        .min_size(vec2(btn_w, btn_h))
+                        .fill(if is_pan { Color32::from_rgb(18, 45, 75) } else { Color32::from_rgb(18, 55, 40) });
+
+                        if ui.add(pan_btn).on_hover_text("Toggle touch between 1-Finger Pan and Draw").clicked() {
+                            app.canvas.touch_nav_mode = if is_pan { TouchNavMode::Draw } else { TouchNavMode::Pan };
+                        }
+
+                        // 2. Measure / Dist
+                        let dist_btn = egui::Button::new(
+                            RichText::new("📏 Dist")
+                                .font(egui::FontId::proportional(12.5))
+                                .color(t.text),
+                        )
+                        .min_size(vec2(btn_w, btn_h))
+                        .fill(Color32::from_white_alpha(20));
+
+                        if ui.add(dist_btn).on_hover_text("Measure Distance (คำสั่งวัดระยะ)").clicked() {
+                            app.start("dist");
+                        }
+
+                        // 3. Zoom Fit
+                        let fit_btn = egui::Button::new(
+                            RichText::new("⛶ Fit")
+                                .font(egui::FontId::proportional(12.5))
+                                .color(t.text),
+                        )
+                        .min_size(vec2(btn_w, btn_h))
+                        .fill(Color32::from_white_alpha(20));
+
+                        if ui.add(fit_btn).on_hover_text("Zoom Extents (ขยายพอดีหน้าจอ)").clicked() {
+                            let _ = app.session.zoom_extents();
+                        }
+
+                        // 4. Tools Sheet
+                        let is_sheet_open = app.canvas.show_mobile_tools_sheet;
+                        let tools_btn = egui::Button::new(
+                            RichText::new("▦ Tools")
+                                .font(egui::FontId::proportional(12.5))
+                                .strong()
+                                .color(if is_sheet_open { Color32::from_rgb(0, 200, 255) } else { Color32::WHITE }),
+                        )
+                        .min_size(vec2(btn_w, btn_h))
+                        .fill(if is_sheet_open { Color32::from_rgb(0, 80, 160) } else { Color32::from_white_alpha(25) });
+
+                        if ui.add(tools_btn).on_hover_text("Open Mobile Tools Sheet (เปิดถาดเครื่องมือ)").clicked() {
+                            app.canvas.show_mobile_tools_sheet = !app.canvas.show_mobile_tools_sheet;
+                        }
+                    });
+                });
+        });
+}
+
+fn mobile_tools_sheet(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let sheet_w = (rect.width() - 20.0).clamp(280.0, 480.0);
+    let sheet_h = 320.0;
+    let pos = pos2(rect.center().x - sheet_w / 2.0, rect.bottom() - sheet_h - 52.0);
+
+    egui::Area::new(egui::Id::new("phone_tools_sheet_area"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 250))
+                .stroke(Stroke::new(1.5, Color32::from_rgb(0, 160, 240)))
+                .corner_radius(egui::CornerRadius::same(14))
+                .inner_margin(egui::Margin::same(14))
+                .show(ui, |ui| {
+                    ui.set_width(sheet_w - 28.0);
+                    ui.vertical(|ui| {
+                        // Title row
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("เครื่องมือเขียนแบบ (Mobile CAD Tools)")
+                                    .font(egui::FontId::proportional(14.0))
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("✕ ปิด").size(12.0).color(t.text_dim)).clicked() {
+                                    app.canvas.show_mobile_tools_sheet = false;
+                                }
+                            });
+                        });
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                            // Section: วาดรูปทรง (Draw)
+                            ui.label(RichText::new("วาดรูปทรง (Draw)").font(egui::FontId::proportional(11.5)).color(Color32::from_rgb(0, 190, 255)));
+                            let draw_tools = [
+                                ("📏 Line", "line", "เส้นตรง (Line)"),
+                                ("〰️ Pline", "pline", "โพลีไลน์ (Polyline)"),
+                                ("⭕ Circle", "circle", "วงกลม (Circle)"),
+                                ("▭ Rect", "rectang", "สี่เหลี่ยม (Rectangle)"),
+                                ("⌒ Arc", "arc", "ส่วนโค้ง (Arc)"),
+                            ];
+                            ui.horizontal_wrapped(|ui| {
+                                for (label, cmd, tip) in draw_tools {
+                                    if ui.add(egui::Button::new(RichText::new(label).size(12.0)).min_size(vec2(72.0, 32.0))).on_hover_text(tip).clicked() {
+                                        app.start(cmd);
+                                        app.canvas.touch_nav_mode = TouchNavMode::Draw;
+                                        app.canvas.show_mobile_tools_sheet = false;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(8.0);
+                            // Section: แก้ไข (Modify)
+                            ui.label(RichText::new("แก้ไข & ดัดแปลง (Modify)").font(egui::FontId::proportional(11.5)).color(Color32::from_rgb(255, 180, 0)));
+                            let mod_tools = [
+                                ("✂️ Trim", "trim", "ตัดเส้น (Trim)"),
+                                ("🗑 Erase", "erase", "ลบวัตถุ (Erase)"),
+                                ("↔️ Offset", "offset", "สร้างเส้นขนาน (Offset)"),
+                                ("✥ Move", "move", "ย้ายวัตถุ (Move)"),
+                                ("❐ Copy", "copy", "คัดลอก (Copy)"),
+                            ];
+                            ui.horizontal_wrapped(|ui| {
+                                for (label, cmd, tip) in mod_tools {
+                                    if ui.add(egui::Button::new(RichText::new(label).size(12.0)).min_size(vec2(72.0, 32.0))).on_hover_text(tip).clicked() {
+                                        app.start(cmd);
+                                        app.canvas.show_mobile_tools_sheet = false;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(8.0);
+                            // Section: กำหนดขนาด & อื่นๆ
+                            ui.label(RichText::new("กำกับขนาด & เลเยอร์ (Dim & Layers)").font(egui::FontId::proportional(11.5)).color(Color32::from_rgb(0, 230, 140)));
+                            let other_tools = [
+                                ("📐 Dim", "dimlinear", "บอกขนาดเชิงเส้น (Dimension)"),
+                                ("🅰️ Text", "text", "เขียนตัวหนังสือ (Text)"),
+                                ("📑 Layers", "layer", "ตัวจัดการเลเยอร์ (Layers)"),
+                                ("↶ Cancel", "cancel", "ยกเลิกคำสั่ง (Esc)"),
+                            ];
+                            ui.horizontal_wrapped(|ui| {
+                                for (label, cmd, tip) in other_tools {
+                                    if ui.add(egui::Button::new(RichText::new(label).size(12.0)).min_size(vec2(72.0, 32.0))).on_hover_text(tip).clicked() {
+                                        if cmd == "cancel" {
+                                            app.session.cancel();
+                                        } else {
+                                            app.start(cmd);
+                                        }
+                                        app.canvas.show_mobile_tools_sheet = false;
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
+        });
+}
+
+fn tablet_pencil_palette(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let pos = pos2(rect.left() + 12.0, rect.top() + 56.0);
+
+    egui::Area::new(egui::Id::new("tablet_pencil_palette_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 235))
+                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 140, 255)))
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(4, 8))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 5.0);
+
+                        // Header / Pen badge
+                        ui.label(RichText::new("✏️").font(egui::FontId::proportional(14.0)).color(Color32::from_rgb(0, 200, 255)));
+                        ui.add_space(2.0);
+
+                        let pencil_tools = [
+                            ("↖", "cancel", "เลือก / ปล่อยคำสั่ง (Select / Esc)"),
+                            ("📏", "line", "เส้นตรง (Line)"),
+                            ("〰️", "pline", "โพลีไลน์ (Polyline)"),
+                            ("⭕", "circle", "วงกลม (Circle)"),
+                            ("▭", "rectang", "สี่เหลี่ยม (Rectangle)"),
+                            ("✂️", "trim", "ตัดเส้น (Trim)"),
+                            ("🗑", "erase", "ลบวัตถุ (Erase)"),
+                            ("📐", "dimlinear", "บอกขนาด (Dimension)"),
+                        ];
+
+                        let is_prompting = app.session.prompting();
+
+                        for (icon, cmd, tip) in pencil_tools {
+                            let is_active = if cmd == "cancel" {
+                                !is_prompting
+                            } else {
+                                false
+                            };
+
+                            let btn = egui::Button::new(
+                                RichText::new(icon)
+                                    .font(egui::FontId::proportional(15.0))
+                                    .color(if is_active { Color32::WHITE } else { t.text }),
+                            )
+                            .min_size(vec2(34.0, 32.0))
+                            .fill(if is_active { Color32::from_rgb(0, 110, 220) } else { Color32::from_white_alpha(15) });
+
+                            if ui.add(btn).on_hover_text(tip).clicked() {
+                                if cmd == "cancel" {
+                                    app.session.cancel();
+                                } else {
+                                    app.start(cmd);
+                                }
+                                app.canvas.touch_nav_mode = TouchNavMode::Draw;
+                            }
+                        }
+
+                        ui.add_space(4.0);
+                        // All Tools Drawer Toggle
+                        let is_drawer_open = app.canvas.show_tablet_tools_drawer;
+                        let all_btn = egui::Button::new(
+                            RichText::new("▦")
+                                .font(egui::FontId::proportional(14.0))
+                                .color(if is_drawer_open { Color32::from_rgb(0, 220, 150) } else { t.text_dim }),
+                        )
+                        .min_size(vec2(34.0, 32.0))
+                        .fill(if is_drawer_open { Color32::from_rgb(0, 70, 50) } else { Color32::from_white_alpha(15) });
+
+                        if ui.add(all_btn).on_hover_text("เปิดแคตตาล็อกเครื่องมือทั้งหมด (All Tool Sets)").clicked() {
+                            app.canvas.show_tablet_tools_drawer = !app.canvas.show_tablet_tools_drawer;
+                        }
+                    });
+                });
+        });
+}
+
+fn tablet_osnap_chips(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let pos = pos2(rect.left() + 66.0, rect.top() + 10.0);
+    use cadcraft_engine::snap::mode;
+
+    egui::Area::new(egui::Id::new("tablet_osnap_chips_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(16, 20, 28, 220))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+
+                        let current_osmode = app.session.settings.osmode;
+                        let osnap_on = current_osmode & mode::OFF == 0 && current_osmode != 0;
+
+                        let snap_chips = [
+                            ("🎯 END", mode::END, "ปลายเส้น (Endpoint)"),
+                            ("⌖ MID", mode::MID, "กึ่งกลาง (Midpoint)"),
+                            ("⊙ CEN", mode::CEN, "จุดศูนย์กลาง (Center)"),
+                            ("✕ INT", mode::INT, "จุดตัด (Intersection)"),
+                            ("⟂ PERP", mode::PER, "ตั้งฉาก (Perpendicular)"),
+                        ];
+
+                        for (label, bit, tip) in snap_chips {
+                            let is_active = osnap_on && (current_osmode & bit != 0);
+                            let chip = egui::Button::new(
+                                RichText::new(label)
+                                    .font(egui::FontId::proportional(11.0))
+                                    .strong()
+                                    .color(if is_active { Color32::from_rgb(220, 245, 255) } else { Color32::from_white_alpha(140) }),
+                            )
+                            .min_size(vec2(54.0, 22.0))
+                            .fill(if is_active { Color32::from_rgb(0, 95, 180) } else { Color32::from_white_alpha(15) });
+
+                            if ui.add(chip).on_hover_text(format!("Osnap: {}\n(แตะเพื่อเปิด/ปิด)", tip)).clicked() {
+                                // Toggle bit and ensure Osnap is ON
+                                app.session.settings.osmode ^= bit;
+                                app.session.settings.osmode &= !mode::OFF;
+                                ui.ctx().request_repaint();
+                            }
+                        }
+
+                        // ORTHO Chip (Lock 90 degrees)
+                        let ortho_on = app.session.settings.orthomode;
+                        let ortho_chip = egui::Button::new(
+                            RichText::new("📐 ORTHO")
+                                .font(egui::FontId::proportional(11.0))
+                                .strong()
+                                .color(if ortho_on { Color32::WHITE } else { Color32::from_white_alpha(140) }),
+                        )
+                        .min_size(vec2(66.0, 22.0))
+                        .fill(if ortho_on { Color32::from_rgb(0, 150, 90) } else { Color32::from_white_alpha(15) });
+
+                        if ui.add(ortho_chip).on_hover_text("Ortho Mode (ล็อคแกนมุมฉาก 90°)\n(แตะเพื่อเปิด/ปิด)").clicked() {
+                            app.session.settings.orthomode = !app.session.settings.orthomode;
+                            ui.ctx().request_repaint();
+                        }
+                    });
+                });
+        });
+}
+
+fn tablet_tools_drawer(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let drawer_w = 270.0;
+    let pos = pos2(rect.left() + 64.0, rect.top() + 50.0);
+    let h = (rect.height() - 70.0).max(300.0);
+
+    egui::Area::new(egui::Id::new("tablet_tools_drawer_area"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(22, 26, 36, 250))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(40)))
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.set_width(drawer_w);
+                    ui.set_height(h);
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("เครื่องมือเขียนแบบ (Tool Sets)").font(egui::FontId::proportional(13.0)).strong().color(Color32::WHITE));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("✕").size(13.0).color(t.text_dim)).clicked() {
+                                    app.canvas.show_tablet_tools_drawer = false;
+                                }
+                            });
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().id_salt("tablet_tools_scroll").show(ui, |ui| {
+                            crate::palettes::toolsets(app, ui);
+                        });
+                    });
+                });
+        });
+}
+
+fn tablet_layers_drawer(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let drawer_w = 290.0;
+    let pos = pos2(rect.right() - drawer_w - 12.0, rect.top() + 50.0);
+    let h = (rect.height() - 70.0).max(300.0);
+
+    egui::Area::new(egui::Id::new("tablet_layers_drawer_area"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(22, 26, 36, 250))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(40)))
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.set_width(drawer_w);
+                    ui.set_height(h);
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("จัดการเลเยอร์ (Layer Manager)").font(egui::FontId::proportional(13.0)).strong().color(Color32::WHITE));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("✕").size(13.0).color(t.text_dim)).clicked() {
+                                    app.canvas.show_tablet_layers_drawer = false;
+                                }
+                            });
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().id_salt("tablet_layers_scroll").show(ui, |ui| {
+                            crate::palettes::layers_section(app, ui);
+                        });
+                    });
+                });
+        });
+}
+
+fn tablet_props_drawer(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let drawer_w = 290.0;
+    let pos = pos2(rect.right() - drawer_w - 12.0, rect.top() + 50.0);
+    let h = (rect.height() - 70.0).max(300.0);
+
+    egui::Area::new(egui::Id::new("tablet_props_drawer_area"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(22, 26, 36, 250))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(40)))
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.set_width(drawer_w);
+                    ui.set_height(h);
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("คุณสมบัติวัตถุ (Properties)").font(egui::FontId::proportional(13.0)).strong().color(Color32::WHITE));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("✕").size(13.0).color(t.text_dim)).clicked() {
+                                    app.canvas.show_tablet_props_drawer = false;
+                                }
+                            });
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().id_salt("tablet_props_scroll").show(ui, |ui| {
+                            crate::palettes::properties_section(app, ui);
+                        });
+                    });
+                });
+        });
 }
 
 fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {

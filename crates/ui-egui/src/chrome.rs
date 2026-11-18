@@ -1,6 +1,6 @@
 //! Window chrome: title and tool bar, file tabs, status bar and the Start page.
 
-use egui::{Rect, Sense, Stroke, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
 use crate::CadApp;
@@ -202,6 +202,191 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             if let Some(c) = clicked {
                 app.start(c);
             }
+        }
+    });
+}
+
+/// Compact Mobile Header for Phone mode (full-screen touch experience)
+pub fn mobile_top_header(app: &mut CadApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    let h = 38.0;
+    egui::Panel::top("cc_mobile_top_header").exact_size(h).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
+        let r = ui.max_rect();
+        let mut x = r.left() + 8.0;
+
+        // Platform Switcher Button
+        let mode_rect = Rect::from_min_size(pos2(x, r.center().y - 12.0), vec2(84.0, 24.0));
+        let mode_resp = ui.interact(mode_rect, ui.id().with("mobile_mode_btn"), Sense::click());
+        if mode_resp.hovered() {
+            ui.painter().rect_filled(mode_rect, 4.0, t.control_hover);
+        } else {
+            ui.painter().rect_filled(mode_rect, 4.0, Color32::from_white_alpha(20));
+        }
+        ui.painter().rect_stroke(mode_rect, 4.0, Stroke::new(1.0, Color32::from_rgb(0, 180, 255)), egui::StrokeKind::Inside);
+        let mode_galley = ui.painter().layout_no_wrap("📱 Phone ▾".into(), egui::FontId::proportional(11.5), Color32::from_rgb(180, 230, 255));
+        ui.painter().galley(pos2(mode_rect.center().x - mode_galley.size().x / 2.0, mode_rect.center().y - mode_galley.size().y / 2.0), mode_galley, Color32::WHITE);
+        if mode_resp.on_hover_text("Switch Platform (เปลี่ยนโหมดอุปกรณ์)").clicked() {
+            app.canvas.show_platform_picker = true;
+        }
+        x += 92.0;
+
+        // Title
+        let title = match app.session.state() {
+            Ok(st) if !app.ui.start_tab => format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
+            _ => crate::tl!("Start").to_string(),
+        };
+        let title_galley = ui.painter().layout_no_wrap(title, egui::FontId::proportional(12.0), t.text_dim);
+        ui.painter().galley(pos2(x, r.center().y - title_galley.size().y / 2.0), title_galley, t.text_dim);
+
+        // Right side: Undo, Redo, Save
+        let mut rx = r.right() - 8.0;
+        let btn_size = 26.0;
+
+        // Save
+        rx -= btn_size;
+        let save_rect = Rect::from_min_size(pos2(rx, r.center().y - btn_size / 2.0), vec2(btn_size, btn_size));
+        let save_resp = ui.interact(save_rect, ui.id().with("mob_save"), Sense::click());
+        if save_resp.hovered() {
+            ui.painter().rect_filled(save_rect, 3.0, t.control_hover);
+        }
+        icons::paint(ui.painter(), save_rect.shrink(4.0), Icon::Save, false);
+        if save_resp.on_hover_text("Save (บันทึก)").clicked() {
+            app.start("qsave");
+        }
+
+        // Redo
+        rx -= btn_size + 4.0;
+        let redo_rect = Rect::from_min_size(pos2(rx, r.center().y - btn_size / 2.0), vec2(btn_size, btn_size));
+        let redo_resp = ui.interact(redo_rect, ui.id().with("mob_redo"), Sense::click());
+        if redo_resp.hovered() {
+            ui.painter().rect_filled(redo_rect, 3.0, t.control_hover);
+        }
+        icons::paint(ui.painter(), redo_rect.shrink(4.0), Icon::Redo, false);
+        if redo_resp.on_hover_text("Redo (ทำซ้ำ)").clicked() {
+            app.start("redo");
+        }
+
+        // Undo
+        rx -= btn_size + 4.0;
+        let undo_rect = Rect::from_min_size(pos2(rx, r.center().y - btn_size / 2.0), vec2(btn_size, btn_size));
+        let undo_resp = ui.interact(undo_rect, ui.id().with("mob_undo"), Sense::click());
+        if undo_resp.hovered() {
+            ui.painter().rect_filled(undo_rect, 3.0, t.control_hover);
+        }
+        icons::paint(ui.painter(), undo_rect.shrink(4.0), Icon::Undo, false);
+        if undo_resp.on_hover_text("Undo (ย้อนกลับ)").clicked() {
+            app.start("u");
+        }
+    });
+}
+
+/// Touch-optimized Tablet Top Bar for iPad and Stylus experience
+pub fn tablet_top_bar(app: &mut CadApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    let h = 42.0;
+    egui::Panel::top("cc_tablet_top_bar").exact_size(h).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
+        let r = ui.max_rect();
+        let mut x = r.left() + 10.0;
+
+        // Platform Switcher
+        let mode_rect = Rect::from_min_size(pos2(x, r.center().y - 13.0), vec2(96.0, 26.0));
+        let mode_resp = ui.interact(mode_rect, ui.id().with("tablet_mode_btn"), Sense::click());
+        if mode_resp.hovered() {
+            ui.painter().rect_filled(mode_rect, 4.0, t.control_hover);
+        } else {
+            ui.painter().rect_filled(mode_rect, 4.0, Color32::from_rgb(18, 36, 60));
+        }
+        ui.painter().rect_stroke(mode_rect, 4.0, Stroke::new(1.2, Color32::from_rgb(0, 160, 255)), egui::StrokeKind::Inside);
+        let mode_galley = ui.painter().layout_no_wrap("📟 Tablet ▾".into(), egui::FontId::proportional(12.0), Color32::from_rgb(200, 235, 255));
+        ui.painter().galley(pos2(mode_rect.center().x - mode_galley.size().x / 2.0, mode_rect.center().y - mode_galley.size().y / 2.0), mode_galley, Color32::WHITE);
+        if mode_resp.on_hover_text("Switch Platform (เปลี่ยนโหมดอุปกรณ์)").clicked() {
+            app.canvas.show_platform_picker = true;
+        }
+        x += 106.0;
+
+        // Title
+        let title = match app.session.state() {
+            Ok(st) if !app.ui.start_tab => format!("CADCraft • {}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
+            _ => format!("CADCraft • {}", crate::tl!("Start")),
+        };
+        let title_galley = ui.painter().layout_no_wrap(title, egui::FontId::proportional(12.5), t.text);
+        ui.painter().galley(pos2(x, r.center().y - title_galley.size().y / 2.0), title_galley.clone(), t.text);
+        x += title_galley.size().x + 20.0;
+
+        // Core Touch Action Buttons: Open, Save, Undo, Redo, Zoom Fit
+        let mut action_btn = |ui: &mut egui::Ui, x: &mut f32, icon: Icon, tip: &str, cmd: &str| {
+            let br = Rect::from_min_size(pos2(*x, r.center().y - 13.0), vec2(28.0, 26.0));
+            let resp = ui.interact(br, ui.id().with(("tablet_act", cmd)), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(br, 3.0, t.control_hover);
+            }
+            icons::paint(ui.painter(), br.shrink(4.0), icon, false);
+            if resp.on_hover_text(tip).clicked() {
+                app.start(cmd);
+            }
+            *x += 32.0;
+        };
+
+        action_btn(ui, &mut x, Icon::Open, "Open Drawing (เปิดไฟล์)", "open");
+        action_btn(ui, &mut x, Icon::Save, "Save Drawing (บันทึกไฟล์)", "qsave");
+        x += 6.0;
+        action_btn(ui, &mut x, Icon::Undo, "Undo (ย้อนกลับ)", "u");
+        action_btn(ui, &mut x, Icon::Redo, "Redo (ทำซ้ำ)", "redo");
+        x += 6.0;
+        action_btn(ui, &mut x, Icon::ZoomExtents, "Zoom Extents (ขยายพอดีจอ)", "zoom.extents");
+
+        // Right side: Slide-over Drawers (Layers, Properties, All Tools)
+        let mut rx = r.right() - 10.0;
+
+        // 1. All Tools drawer toggle
+        let tools_w = 88.0;
+        rx -= tools_w;
+        let tools_rect = Rect::from_min_size(pos2(rx, r.center().y - 13.0), vec2(tools_w, 26.0));
+        let is_tools_open = app.canvas.show_tablet_tools_drawer;
+        let tools_resp = ui.interact(tools_rect, ui.id().with("tablet_tools_toggle"), Sense::click());
+        if tools_resp.hovered() || is_tools_open {
+            ui.painter().rect_filled(tools_rect, 4.0, if is_tools_open { Color32::from_rgb(0, 90, 160) } else { t.control_hover });
+        } else {
+            ui.painter().rect_filled(tools_rect, 4.0, Color32::from_white_alpha(15));
+        }
+        let tools_text = ui.painter().layout_no_wrap("▦ เครื่องมือ".into(), egui::FontId::proportional(11.5), if is_tools_open { Color32::WHITE } else { t.text });
+        ui.painter().galley(pos2(tools_rect.center().x - tools_text.size().x / 2.0, tools_rect.center().y - tools_text.size().y / 2.0), tools_text, Color32::WHITE);
+        if tools_resp.on_hover_text("Toggle All Tools Drawer (เปิด/ปิด พาเนลเครื่องมือ)").clicked() {
+            app.canvas.show_tablet_tools_drawer = !app.canvas.show_tablet_tools_drawer;
+        }
+
+        // 2. Properties drawer toggle
+        let prop_w = 84.0;
+        rx -= prop_w + 6.0;
+        let prop_rect = Rect::from_min_size(pos2(rx, r.center().y - 13.0), vec2(prop_w, 26.0));
+        let is_props_open = app.canvas.show_tablet_props_drawer;
+        let prop_resp = ui.interact(prop_rect, ui.id().with("tablet_props_toggle"), Sense::click());
+        if prop_resp.hovered() || is_props_open {
+            ui.painter().rect_filled(prop_rect, 4.0, if is_props_open { Color32::from_rgb(0, 90, 160) } else { t.control_hover });
+        } else {
+            ui.painter().rect_filled(prop_rect, 4.0, Color32::from_white_alpha(15));
+        }
+        let prop_text = ui.painter().layout_no_wrap("⚙️ Properties".into(), egui::FontId::proportional(11.5), if is_props_open { Color32::WHITE } else { t.text });
+        ui.painter().galley(pos2(prop_rect.center().x - prop_text.size().x / 2.0, prop_rect.center().y - prop_text.size().y / 2.0), prop_text, Color32::WHITE);
+        if prop_resp.on_hover_text("Toggle Properties Drawer (เปิด/ปิด พาเนลคุณสมบัติ)").clicked() {
+            app.canvas.show_tablet_props_drawer = !app.canvas.show_tablet_props_drawer;
+        }
+
+        // 3. Layers drawer toggle
+        let layer_w = 76.0;
+        rx -= layer_w + 6.0;
+        let layer_rect = Rect::from_min_size(pos2(rx, r.center().y - 13.0), vec2(layer_w, 26.0));
+        let is_layer_open = app.canvas.show_tablet_layers_drawer;
+        let layer_resp = ui.interact(layer_rect, ui.id().with("tablet_layer_toggle"), Sense::click());
+        if layer_resp.hovered() || is_layer_open {
+            ui.painter().rect_filled(layer_rect, 4.0, if is_layer_open { Color32::from_rgb(0, 90, 160) } else { t.control_hover });
+        } else {
+            ui.painter().rect_filled(layer_rect, 4.0, Color32::from_white_alpha(15));
+        }
+        let layer_text = ui.painter().layout_no_wrap("📑 Layers".into(), egui::FontId::proportional(11.5), if is_layer_open { Color32::WHITE } else { t.text });
+        ui.painter().galley(pos2(layer_rect.center().x - layer_text.size().x / 2.0, layer_rect.center().y - layer_text.size().y / 2.0), layer_text, Color32::WHITE);
+        if layer_resp.on_hover_text("Toggle Layer Manager (เปิด/ปิด จัดการเลเยอร์)").clicked() {
+            app.canvas.show_tablet_layers_drawer = !app.canvas.show_tablet_layers_drawer;
         }
     });
 }

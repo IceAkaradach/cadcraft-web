@@ -322,12 +322,12 @@ impl CadApp {
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Pan;
             }
             canvas::DeviceMode::Tablet => {
-                let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, true);
+                let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, false);
                 let _ = self.ui.docking.set_visible(docking::Panel::Properties, false);
                 let _ = self.ui.docking.set_visible(docking::Panel::Layers, false);
-                self.ui.show_toolsets = true;
+                self.ui.show_toolsets = false;
                 self.ui.show_palettes = false;
-                self.ui.history_lines = 2;
+                self.ui.history_lines = 1;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
             }
             canvas::DeviceMode::Desktop => {
@@ -666,24 +666,51 @@ impl CadApp {
             return;
         }
 
-        chrome::title_and_toolbar(self, ui);
-        if self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
-        }
-        if self.ui.show_status_bar {
-            chrome::status_bar(self, ui);
-        }
-        if self.ui.show_file_tabs {
-            chrome::file_tabs(self, ui);
-        }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if has_doc {
-                docking::show(self, ui);
-            } else {
-                chrome::start_page(self, ui);
+        match self.canvas.device_mode {
+            canvas::DeviceMode::Phone => {
+                chrome::mobile_top_header(self, ui);
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                    if has_doc {
+                        docking::show(self, ui);
+                    } else {
+                        chrome::start_page(self, ui);
+                    }
+                });
             }
-        });
+            canvas::DeviceMode::Tablet => {
+                chrome::tablet_top_bar(self, ui);
+                if self.ui.show_file_tabs {
+                    chrome::file_tabs(self, ui);
+                }
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                    if has_doc {
+                        docking::show(self, ui);
+                    } else {
+                        chrome::start_page(self, ui);
+                    }
+                });
+            }
+            canvas::DeviceMode::Desktop => {
+                chrome::title_and_toolbar(self, ui);
+                if self.ui.in_window_menu {
+                    menus::menu_bar(self, ui);
+                }
+                if self.ui.show_status_bar {
+                    chrome::status_bar(self, ui);
+                }
+                if self.ui.show_file_tabs {
+                    chrome::file_tabs(self, ui);
+                }
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                    if has_doc {
+                        docking::show(self, ui);
+                    } else {
+                        chrome::start_page(self, ui);
+                    }
+                });
+            }
+        }
         dialogs::show(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());
