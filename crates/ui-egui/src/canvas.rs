@@ -1583,7 +1583,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     let press_origin = ui.input(|i| i.pointer.press_origin());
     let allow_touch_keypad = app.canvas.device_mode != DeviceMode::Desktop;
-    let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 14.0);
+    let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 12.0);
 
     // Live measurement tag & pen_drag state while actively dragging with Apple Pencil or finger
     let is_dragging_draw = point_prompt && inside && resp.dragged_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching;
@@ -1610,7 +1610,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 
     // Drag-to-dimension release: PAUSE and prompt for precision keypad! (Wait for user input, DO NOT auto-commit!)
-    if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching {
+    if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && !is_multi_touching {
         if let Some(state) = &mut app.canvas.pen_drag {
             state.is_paused = true;
             if let Some(hp) = hover_pos {
@@ -1619,7 +1619,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
 
-    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!is_intentional_drag || !allow_touch_keypad) && !is_multi_touching;
+    let had_active_pen_drag = app.canvas.pen_drag.as_ref().is_some_and(|pd| pd.is_paused);
+    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!had_active_pen_drag || !allow_touch_keypad) && !is_multi_touching;
     let pressed_primary = (pressed_primary || drag_clicked || resp.clicked_by(egui::PointerButton::Primary)) && !is_multi_touching;
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
@@ -1763,27 +1764,37 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Press-and-drag selection window (AutoCAD's PICKDRAG = 2; click-click still works): a drag
     // that starts while objects are being selected opens a window where the button went down,
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
+    // Press-and-drag selection window or direct grip dragging
     if resp.drag_started_by(egui::PointerButton::Primary)
         && !app.canvas.is_3d
         && app.canvas.touch_nav_mode == TouchNavMode::Draw
         && !middle_down
-        && app.session.pending_window.is_none()
-        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-        && rect.contains(origin)
-        && grip_at(app, &xf, Some(origin)).is_none()
-        && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
     {
-        app.canvas.drag_window = app.session.begin_window(xf.to_world(origin));
+        if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+            if rect.contains(origin) {
+                if let Some(g) = grip_at(app, &xf, Some(origin)) {
+                    // Direct touch/pencil drag on a grip: start grip edit immediately!
+                    click_grip(app, g, false);
+                } else if let Some(g) = crate::dyngrips::at(app, &xf, Some(origin)) {
+                    crate::dyngrips::click(app, g);
+                } else if app.session.pending_window.is_none() {
+                    app.canvas.drag_window = app.session.begin_window(xf.to_world(origin));
+                }
+            }
+        }
     }
     if app.canvas.drag_window && resp.drag_stopped_by(egui::PointerButton::Primary) {
         app.canvas.drag_window = false;
-        if app.session.pending_window.is_some()
-            && let Some(end) = ui.input(|i| i.pointer.interact_pos())
-        {
-            let end = xf.to_world(end);
-            let done = if app.session.prompting() { app.session.input(Input::Point(end)) } else { app.session.idle_click(end, mods.shift) };
-            if let Err(e) = done {
-                app.session.echo(e.to_string());
+        if app.session.pending_window.is_some() {
+            let end_opt = hover_pos.or_else(|| ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos())));
+            if let Some(end) = end_opt {
+                let end = xf.to_world(end);
+                let done = if app.session.prompting() { app.session.input(Input::Point(end)) } else { app.session.idle_click(end, mods.shift) };
+                if let Err(e) = done {
+                    app.session.echo(e.to_string());
+                }
+            } else {
+                app.session.pending_window = None;
             }
         }
     }
@@ -3827,7 +3838,8 @@ fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
 fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)> {
     let hp = hover?;
     let st = app.session.state().ok()?;
-    let gs = app.session.settings.gripsize as f32 + 3.0;
+    let touch_extra = if app.canvas.device_mode != DeviceMode::Desktop { 14.0 } else { 0.0 };
+    let gs = app.session.settings.gripsize as f32 + 3.0 + touch_extra;
     let sel = app.session.selection();
     if !app.session.shows_grips(sel.len()) {
         return None;

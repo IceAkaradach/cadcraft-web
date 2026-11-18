@@ -148,10 +148,25 @@ mod web {
                         let saved_mode = cc.storage.and_then(|s| s.get_string("cadcraft.device_mode"));
                         let auto_enter = cc.storage.and_then(|s| s.get_string("cadcraft.auto_enter")).is_some_and(|v| v == "true");
 
-                        let width = web_sys::window().and_then(|w| w.inner_width().ok()).and_then(|v| v.as_f64()).unwrap_or(1024.0);
+                        let win = web_sys::window();
+                        let is_touch = win
+                            .as_ref()
+                            .map(|w| w.navigator().max_touch_points() > 0)
+                            .unwrap_or(false);
+                        let user_agent = win
+                            .as_ref()
+                            .and_then(|w| w.navigator().user_agent().ok())
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let is_ipad_or_tablet = user_agent.contains("ipad")
+                            || (user_agent.contains("macintosh") && is_touch)
+                            || user_agent.contains("tablet")
+                            || user_agent.contains("android");
+
+                        let width = win.as_ref().and_then(|w| w.inner_width().ok()).and_then(|v| v.as_f64()).unwrap_or(1024.0);
                         let detected_mode = if width < 600.0 {
                             cadcraft_ui_egui::canvas::DeviceMode::Phone
-                        } else if width < 1200.0 {
+                        } else if is_ipad_or_tablet || is_touch || width < 1100.0 {
                             cadcraft_ui_egui::canvas::DeviceMode::Tablet
                         } else {
                             cadcraft_ui_egui::canvas::DeviceMode::Desktop
@@ -164,7 +179,12 @@ mod web {
                             app.apply_device_mode(saved_mode.as_deref().map(cadcraft_ui_egui::canvas::DeviceMode::from_id).unwrap_or(detected_mode));
                             app.canvas.show_platform_picker = true;
                         } else if let Some(mode_id) = saved_mode {
-                            app.apply_device_mode(cadcraft_ui_egui::canvas::DeviceMode::from_id(&mode_id));
+                            let mode = if is_ipad_or_tablet && mode_id == "desktop" && !auto_enter {
+                                detected_mode
+                            } else {
+                                cadcraft_ui_egui::canvas::DeviceMode::from_id(&mode_id)
+                            };
+                            app.apply_device_mode(mode);
                             app.canvas.auto_enter_workspace = auto_enter;
                             app.canvas.show_platform_picker = !auto_enter;
                         } else {

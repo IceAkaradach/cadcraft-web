@@ -321,6 +321,8 @@ impl CadApp {
                 self.ui.show_command_line = false;
                 self.ui.history_lines = 0;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Pan;
+                self.session.settings.pickbox = 18.0;
+                self.session.settings.gripsize = 10.0;
             }
             canvas::DeviceMode::Tablet => {
                 let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, false);
@@ -331,6 +333,8 @@ impl CadApp {
                 self.ui.show_command_line = false;
                 self.ui.history_lines = 0;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
+                self.session.settings.pickbox = 16.0;
+                self.session.settings.gripsize = 9.0;
             }
             canvas::DeviceMode::Desktop => {
                 let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, true);
@@ -342,6 +346,8 @@ impl CadApp {
                 self.ui.history_lines = 3;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
                 self.canvas.pen_drag = None;
+                self.session.settings.pickbox = 4.0;
+                self.session.settings.gripsize = 5.0;
             }
         }
     }
@@ -418,6 +424,8 @@ impl CadApp {
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
+        prefs["deviceMode"] = json!(self.canvas.device_mode.id());
+        prefs["autoEnterWorkspace"] = json!(self.canvas.auto_enter_workspace);
         prefs.to_string()
     }
 
@@ -444,6 +452,13 @@ impl CadApp {
         }
         if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
             self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
+        }
+        if let Some(m) = v.get("deviceMode").and_then(Value::as_str) {
+            self.apply_device_mode(canvas::DeviceMode::from_id(m));
+        }
+        if let Some(ae) = v.get("autoEnterWorkspace").and_then(Value::as_bool) {
+            self.canvas.auto_enter_workspace = ae;
+            self.canvas.show_platform_picker = !ae;
         }
     }
 
