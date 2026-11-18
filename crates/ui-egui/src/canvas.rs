@@ -134,6 +134,19 @@ pub struct CanvasState {
     pub visual_style_name: String,
     /// Touch navigation mode for mobile, tablet, and flexible interaction.
     pub touch_nav_mode: TouchNavMode,
+    /// Floating pen/touch drag dimension input popup state.
+    pub pen_drag: Option<PenDragState>,
+}
+
+/// State for the floating touch/pen drag distance and angle keypad.
+#[derive(Clone, Debug)]
+pub struct PenDragState {
+    pub base: Vec2,
+    pub current_point: Vec2,
+    pub screen_pos: Pos2,
+    pub angle_rad: f64,
+    pub distance_input: String,
+    pub is_first_digit: bool,
 }
 
 /// Touch navigation mode for responsive devices (Mobile, iPad, Tablet, PC/Mac).
@@ -1504,7 +1517,47 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && app.session.pending_window.is_none()
         && app.canvas.touch_nav_mode == TouchNavMode::Draw
         && !app.session.realtime_zoom_active();
-    let pressed_primary = pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
+
+    let press_origin = ui.input(|i| i.pointer.press_origin());
+    let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 14.0);
+
+    // Intentional pen/touch drag during a point prompt:
+    // When released, pause and open the touch dimension keypad instead of immediately placing the point.
+    if point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag {
+        let orig = press_origin.unwrap_or(rect.center());
+        let end_hp = hover_pos.unwrap_or(orig);
+        let end_w = effective_point(app, xf.to_world(end_hp), &xf, ui.ctx());
+
+        if let Some(base) = app.session.current_prompt().and_then(|p| p.base) {
+            let dist = base.dist(end_w);
+            let angle = (end_w.y - base.y).atan2(end_w.x - base.x);
+            app.canvas.pen_drag = Some(PenDragState {
+                base,
+                current_point: end_w,
+                screen_pos: end_hp,
+                angle_rad: angle,
+                distance_input: format!("{:.2}", dist),
+                is_first_digit: true,
+            });
+        } else {
+            // No base point yet (e.g. first point of LINE): set first point at drag start, and hold end point
+            let first_world = effective_point(app, xf.to_world(orig), &xf, ui.ctx());
+            let _ = app.session.input(Input::Point(first_world));
+            let dist = first_world.dist(end_w);
+            let angle = (end_w.y - first_world.y).atan2(end_w.x - first_world.x);
+            app.canvas.pen_drag = Some(PenDragState {
+                base: first_world,
+                current_point: end_w,
+                screen_pos: end_hp,
+                angle_rad: angle,
+                distance_input: format!("{:.2}", dist),
+                is_first_digit: true,
+            });
+        }
+    }
+
+    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && !is_intentional_drag;
+    let pressed_primary = (pressed_primary || drag_clicked) && app.canvas.pen_drag.is_none();
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
@@ -1568,6 +1621,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.cursor = None;
         app.canvas.snap = None;
         app.session.cursor_deferred = None;
+    }
+    if let Some(pd) = &app.canvas.pen_drag {
+        app.canvas.cursor = Some(pd.current_point);
+        app.session.cursor = pd.current_point;
     }
 
     // A click on the Dynamic Input options menu picks the keyword; elsewhere it closes the menu.
@@ -1955,6 +2012,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     viewport_controls(app, ui, rect);
     viewport_navigation_bar(app, ui, rect);
+    pen_drag_keypad(app, ui, rect);
     // Typing and Escape reach the command line even when its overlay is hidden.
     crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
@@ -2730,6 +2788,145 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                 });
         });
+}
+
+fn pen_drag_keypad(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let Some(mut state) = app.canvas.pen_drag.clone() else { return };
+    let mut confirm = false;
+    let mut cancel = false;
+
+    // Position: near the end of the drag, clamped inside rect so it doesn't overflow screen
+    let popup_w = 210.0;
+    let popup_h = 245.0;
+    let px = (state.screen_pos.x + 15.0).min(rect.right() - popup_w - 12.0).max(rect.left() + 12.0);
+    let py = (state.screen_pos.y - 120.0).min(rect.bottom() - popup_h - 12.0).max(rect.top() + 45.0);
+    let popup_pos = pos2(px, py);
+
+    egui::Area::new(egui::Id::new("pen_drag_keypad_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(popup_pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x1e, 0x24, 0x2c))
+                .stroke(Stroke::new(1.5, Color32::from_rgb(0, 122, 255)))
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(10))
+                .shadow(egui::Shadow {
+                    offset: [0, 4],
+                    blur: 16,
+                    spread: 0,
+                    color: Color32::from_black_alpha(180),
+                })
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+
+                    // Header: Distance & Angle indicator
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("📏 Distance").font(egui::FontId::proportional(14.0)).color(Color32::from_rgb(0, 190, 255)).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new(RichText::new("✕").font(egui::FontId::proportional(13.0)).color(Color32::GRAY)).fill(Color32::TRANSPARENT)).clicked() {
+                                cancel = true;
+                            }
+                            let deg = (state.angle_rad.to_degrees() * 10.0).round() / 10.0;
+                            ui.label(RichText::new(format!("∠ {deg}°")).font(egui::FontId::proportional(12.0)).color(Color32::from_rgb(255, 180, 0)));
+                        });
+                    });
+                    ui.add_space(2.0);
+
+                    // Interactive Input Box with OK button
+                    ui.horizontal(|ui| {
+                        let text_resp = ui.add(
+                            egui::TextEdit::singleline(&mut state.distance_input)
+                                .font(egui::FontId::monospace(17.0))
+                                .desired_width(120.0)
+                                .text_color(Color32::WHITE)
+                                .margin(egui::Margin::symmetric(6, 4))
+                        );
+                        if text_resp.changed() {
+                            state.is_first_digit = false;
+                        }
+                        if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            confirm = true;
+                        }
+                        let ok_btn = egui::Button::new(RichText::new("✔ OK").font(egui::FontId::proportional(14.0)).strong().color(Color32::WHITE))
+                            .fill(Color32::from_rgb(0, 150, 70))
+                            .corner_radius(egui::CornerRadius::same(5))
+                            .min_size(vec2(54.0, 28.0));
+                        if ui.add(ok_btn).clicked() {
+                            confirm = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+
+                    // 4x3 Touch Numeric Keypad
+                    let btn_size = vec2(58.0, 32.0);
+                    let num_btn = |ui: &mut egui::Ui, text: &'static str| -> bool {
+                        let btn = egui::Button::new(RichText::new(text).font(egui::FontId::proportional(16.0)).color(Color32::WHITE))
+                            .fill(Color32::from_rgb(0x2d, 0x35, 0x42))
+                            .corner_radius(egui::CornerRadius::same(6));
+                        ui.add_sized(btn_size, btn).clicked()
+                    };
+
+                    egui::Grid::new("pen_keypad_grid").spacing(vec2(5.0, 5.0)).show(ui, |ui| {
+                        if num_btn(ui, "7") { append_num(&mut state, "7"); }
+                        if num_btn(ui, "8") { append_num(&mut state, "8"); }
+                        if num_btn(ui, "9") { append_num(&mut state, "9"); }
+                        ui.end_row();
+
+                        if num_btn(ui, "4") { append_num(&mut state, "4"); }
+                        if num_btn(ui, "5") { append_num(&mut state, "5"); }
+                        if num_btn(ui, "6") { append_num(&mut state, "6"); }
+                        ui.end_row();
+
+                        if num_btn(ui, "1") { append_num(&mut state, "1"); }
+                        if num_btn(ui, "2") { append_num(&mut state, "2"); }
+                        if num_btn(ui, "3") { append_num(&mut state, "3"); }
+                        ui.end_row();
+
+                        if num_btn(ui, "0") { append_num(&mut state, "0"); }
+                        if num_btn(ui, ".") { append_num(&mut state, "."); }
+                        let del_btn = egui::Button::new(RichText::new("⌫").font(egui::FontId::proportional(16.0)).color(Color32::from_rgb(255, 120, 120)))
+                            .fill(Color32::from_rgb(0x3e, 0x2e, 0x32))
+                            .corner_radius(egui::CornerRadius::same(6));
+                        if ui.add_sized(btn_size, del_btn).clicked() {
+                            state.distance_input.pop();
+                            state.is_first_digit = false;
+                        }
+                        ui.end_row();
+                    });
+                });
+        });
+
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        cancel = true;
+    }
+
+    if confirm {
+        if let Ok(d) = state.distance_input.trim().parse::<f64>() {
+            if d > 0.0 {
+                let final_point = state.base + Vec2::new(d * state.angle_rad.cos(), d * state.angle_rad.sin());
+                let res = app.session.input(Input::Point(final_point));
+                if let Err(e) = res {
+                    app.session.echo(e.to_string());
+                }
+            }
+        }
+        app.canvas.pen_drag = None;
+        ui.ctx().request_repaint();
+    } else if cancel {
+        app.canvas.pen_drag = None;
+        ui.ctx().request_repaint();
+    } else {
+        app.canvas.pen_drag = Some(state);
+    }
+}
+
+fn append_num(state: &mut PenDragState, s: &str) {
+    if state.is_first_digit {
+        state.distance_input.clear();
+        state.is_first_digit = false;
+    }
+    state.distance_input.push_str(s);
 }
 
 fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
