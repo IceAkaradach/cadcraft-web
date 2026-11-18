@@ -12,8 +12,8 @@
   <title>CADCraft</title>
   
 <script type="module">
-import init, * as bindings from './cadcraft-web-d9c8f61992fb2b4c.js';
-const wasm = await init({ module_or_path: './cadcraft-web-32568a9e55530e4_bg.wasm' });
+import init, * as bindings from './cadcraft-web-7f2cd4254121ddbd.js';
+const wasm = await init({ module_or_path: './cadcraft-web-df27b24e100e9241_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -58,7 +58,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       pointer-events: none;
     }
   </style>
-<link rel="modulepreload" href="./cadcraft-web-d9c8f61992fb2b4c.js" crossorigin="anonymous" integrity="sha384-xY4JDule0Rcu/2zJXdJADfxMXH8smeZ1iw2ksRpGIB1mrNOTuYYUIKe4byCpleKE"><link rel="preload" href="./cadcraft-web-32568a9e55530e4_bg.wasm" crossorigin="anonymous" integrity="sha384-HUXcIYfxAjC0IPiVEDmHcGDCfXXJuH1fLP5ol15F2QfNbzKctYoHxUAI0d9D8QXE" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="./cadcraft-web-7f2cd4254121ddbd.js" crossorigin="anonymous" integrity="sha384-8QrWLDV/6tFU3sHu5kx9b4qkNyoQIEPBeWcY9CMyNHnwATQ4Ob910M7zOASKtq26"><link rel="preload" href="./cadcraft-web-df27b24e100e9241_bg.wasm" crossorigin="anonymous" integrity="sha384-/IrMbKsv+zfn9mgkr3639HoDms03M2544U1lD+nwZDLl1rpZ5rV8klNfpmt4FkKS" as="fetch" type="application/wasm"></head>
 <body>
   <canvas id="cadcraft_canvas"></canvas>
   <div id="cadcraft_loading">Loading CADCraft&hellip;</div>
