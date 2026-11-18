@@ -12,3 +12,4 @@
 !/dist/web/
 .trunk-lock
 /.claude/worktrees/
+.github/
