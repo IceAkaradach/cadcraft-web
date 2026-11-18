@@ -1,0 +1,9 @@
+{
+  "name": "cadcraft-web",
+  "version": "0.19.0",
+  "description": "AutoCAD-compatible 2D/3D CAD Web Application powered by Rust and WebAssembly",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Pre-built WASM package ready in dist/web'"
+  }
+}
