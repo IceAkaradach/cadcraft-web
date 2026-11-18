@@ -152,6 +152,25 @@ pub struct CanvasState {
     pub show_tablet_layers_drawer: bool,
     /// Whether to show the Tablet slide-over properties drawer.
     pub show_tablet_props_drawer: bool,
+    /// Non-blocking interactive dimension HUD tag from the last drawn segment.
+    pub dim_hud: Option<DimHudState>,
+    /// Timestamp when multi-touch gesture was last active to prevent gesture conflicts.
+    pub last_multi_touch_ms: f64,
+    /// Whether multi-touch gesture is currently active.
+    pub is_multi_touching: bool,
+}
+
+/// State for the non-blocking dimension HUD tag and on-demand keypad.
+#[derive(Clone, Debug)]
+pub struct DimHudState {
+    pub base: Vec2,
+    pub point: Vec2,
+    pub screen_pos: Pos2,
+    pub distance: f64,
+    pub angle_deg: f64,
+    pub show_keypad: bool,
+    pub keypad_input: String,
+    pub is_first_digit: bool,
 }
 
 /// Device experience mode for customized UI layout and touch/mouse logic.
@@ -1386,34 +1405,41 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.session.zoom_about(f64::from(zoom_pinch), xf.to_world(hp));
     }
     // Multi-touch gestures (two-finger pinch-zoom and pan for iPad, tablets, and smartphones)
-    if inside {
-        if let Some(multi_touch) = ui.input(|i| i.multi_touch()) {
-            if (multi_touch.zoom_delta - 1.0).abs() > 0.001 {
-                let center_world = xf.to_world(multi_touch.center_pos);
-                let _ = app.session.zoom_about(f64::from(multi_touch.zoom_delta), center_world);
-                if let Some(st) = &mut app.canvas.orbit_state {
-                    st.zoom = (st.zoom * multi_touch.zoom_delta).clamp(0.01, 1000.0);
-                }
-                ui.ctx().request_repaint();
+    let has_multi_touch = ui.input(|i| i.multi_touch().is_some());
+    if has_multi_touch {
+        app.canvas.last_multi_touch_ms = crate::now_ms();
+        app.canvas.is_multi_touching = true;
+    } else if crate::now_ms() - app.canvas.last_multi_touch_ms > 250.0 {
+        app.canvas.is_multi_touching = false;
+    }
+    let is_multi_touching = app.canvas.is_multi_touching;
+
+    if inside && let Some(multi_touch) = ui.input(|i| i.multi_touch()) {
+        if (multi_touch.zoom_delta - 1.0).abs() > 0.001 {
+            let center_world = xf.to_world(multi_touch.center_pos);
+            let _ = app.session.zoom_about(f64::from(multi_touch.zoom_delta), center_world);
+            if let Some(st) = &mut app.canvas.orbit_state {
+                st.zoom = (st.zoom * multi_touch.zoom_delta).clamp(0.01, 1000.0);
             }
-            let d = multi_touch.translation_delta;
-            if d.length_sq() > 0.04 {
-                if app.canvas.is_3d {
-                    let st = app.canvas.orbit_state.get_or_insert_with(Default::default);
-                    if multi_touch.rotation_delta.abs() > 0.005 {
-                        st.yaw += multi_touch.rotation_delta;
-                    }
-                    st.pan_x += d.x;
-                    st.pan_y += d.y;
-                    ui.ctx().request_repaint();
-                } else if let Ok(st) = app.session.state_mut() {
-                    let v = st.view();
-                    st.set_view_quiet(cadcraft_engine::View {
-                        center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
-                        height: v.height,
-                    });
-                    ui.ctx().request_repaint();
+            ui.ctx().request_repaint();
+        }
+        let d = multi_touch.translation_delta;
+        if d.length_sq() > 0.04 {
+            if app.canvas.is_3d {
+                let st = app.canvas.orbit_state.get_or_insert_with(Default::default);
+                if multi_touch.rotation_delta.abs() > 0.005 {
+                    st.yaw += multi_touch.rotation_delta;
                 }
+                st.pan_x += d.x;
+                st.pan_y += d.y;
+                ui.ctx().request_repaint();
+            } else if let Ok(st) = app.session.state_mut() {
+                let v = st.view();
+                st.set_view_quiet(cadcraft_engine::View {
+                    center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
+                    height: v.height,
+                });
+                ui.ctx().request_repaint();
             }
         }
     }
@@ -1458,8 +1484,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
         let _ = app.session.realtime_zoom(f64::from(resp.drag_delta().y));
     }
-    // Touch Navigation Mode: Single-finger / primary drag for Pan or 3D Orbit
-    if resp.dragged_by(egui::PointerButton::Primary) && inside {
+    // Touch Navigation Mode: Single-finger / primary drag for Pan or 3D Orbit (suppressed when multi-touching)
+    if resp.dragged_by(egui::PointerButton::Primary) && inside && !is_multi_touching {
         if app.canvas.touch_nav_mode == TouchNavMode::Pan {
             let d = resp.drag_delta();
             if app.canvas.is_3d {
@@ -1566,15 +1592,30 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
         && app.session.pending_window.is_none()
         && app.canvas.touch_nav_mode == TouchNavMode::Draw
-        && !app.session.realtime_zoom_active();
+        && !app.session.realtime_zoom_active()
+        && !is_multi_touching;
 
     let press_origin = ui.input(|i| i.pointer.press_origin());
     let allow_touch_keypad = app.canvas.device_mode != DeviceMode::Desktop;
     let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 14.0);
 
-    // Intentional pen/touch drag during a point prompt:
-    // When released on touch/tablet/phone, pause and open the touch dimension keypad instead of immediately placing the point.
-    if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag {
+    // Live measurement tag while dragging with Apple Pencil or finger
+    let is_dragging_draw = point_prompt && inside && resp.dragged_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching;
+    if is_dragging_draw && let Some(hp) = hover_pos {
+        let base_pt = app.session.current_prompt().and_then(|p| p.base).or_else(|| press_origin.map(|orig| xf.to_world(orig)));
+        if let Some(base) = base_pt {
+            let cur_w = effective_point(app, xf.to_world(hp), &xf, ui.ctx());
+            let dist = base.dist(cur_w);
+            let angle = (cur_w.y - base.y).atan2(cur_w.x - base.x).to_degrees();
+            let live_rect = Rect::from_min_size(pos2(hp.x + 18.0, hp.y - 32.0), vec2(128.0, 24.0));
+            ui.painter().rect_filled(live_rect, 5.0, Color32::from_rgba_premultiplied(16, 22, 34, 235));
+            ui.painter().rect_stroke(live_rect, 5.0, Stroke::new(1.0, Color32::from_rgb(0, 180, 255)), egui::StrokeKind::Inside);
+            ui.painter().text(live_rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1} mm  {:.0}°", dist, angle), egui::FontId::proportional(11.5), Color32::WHITE);
+        }
+    }
+
+    // Drag-to-dimension release: Place point cleanly and surface non-blocking Dimension HUD
+    if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching {
         let orig = press_origin.unwrap_or(rect.center());
         let end_hp = hover_pos.unwrap_or(orig);
         let end_w = effective_point(app, xf.to_world(end_hp), &xf, ui.ctx());
@@ -1582,33 +1623,45 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if let Some(base) = app.session.current_prompt().and_then(|p| p.base) {
             let dist = base.dist(end_w);
             let angle = (end_w.y - base.y).atan2(end_w.x - base.x);
-            app.canvas.pen_drag = Some(PenDragState {
+            let result = match app.canvas.snap {
+                Some(hit) => app.session.input_snapped(hit),
+                None => app.session.input(Input::Point(end_w)),
+            };
+            if let Err(e) = result {
+                app.session.echo(e.to_string());
+            }
+            app.canvas.dim_hud = Some(DimHudState {
                 base,
-                current_point: end_w,
+                point: end_w,
                 screen_pos: end_hp,
-                angle_rad: angle,
-                distance_input: format!("{:.2}", dist),
+                distance: dist,
+                angle_deg: angle.to_degrees(),
+                show_keypad: false,
+                keypad_input: format!("{:.2}", dist),
                 is_first_digit: true,
             });
         } else {
-            // No base point yet (e.g. first point of LINE): set first point at drag start, and hold end point
+            // First point at drag start, second at drag end
             let first_world = effective_point(app, xf.to_world(orig), &xf, ui.ctx());
             let _ = app.session.input(Input::Point(first_world));
             let dist = first_world.dist(end_w);
             let angle = (end_w.y - first_world.y).atan2(end_w.x - first_world.x);
-            app.canvas.pen_drag = Some(PenDragState {
+            let _ = app.session.input(Input::Point(end_w));
+            app.canvas.dim_hud = Some(DimHudState {
                 base: first_world,
-                current_point: end_w,
+                point: end_w,
                 screen_pos: end_hp,
-                angle_rad: angle,
-                distance_input: format!("{:.2}", dist),
+                distance: dist,
+                angle_deg: angle.to_degrees(),
+                show_keypad: false,
+                keypad_input: format!("{:.2}", dist),
                 is_first_digit: true,
             });
         }
     }
 
-    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!is_intentional_drag || !allow_touch_keypad);
-    let pressed_primary = (pressed_primary || drag_clicked) && app.canvas.pen_drag.is_none();
+    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!is_intentional_drag || !allow_touch_keypad) && !is_multi_touching;
+    let pressed_primary = (pressed_primary || drag_clicked) && !is_multi_touching;
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
@@ -2062,18 +2115,22 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_controls(app, ui, rect);
-    viewport_navigation_bar(app, ui, rect);
-    pen_drag_keypad(app, ui, rect);
+    if app.canvas.device_mode == DeviceMode::Desktop {
+        viewport_navigation_bar(app, ui, rect);
+    }
+    smart_dim_hud(app, ui, rect);
 
     // Platform-specific overlays and interactive tools
     match app.canvas.device_mode {
         DeviceMode::Phone => {
+            touch_prompt_pill(app, ui, rect);
             mobile_bottom_bar(app, ui, rect);
             if app.canvas.show_mobile_tools_sheet {
                 mobile_tools_sheet(app, ui, rect);
             }
         }
         DeviceMode::Tablet => {
+            touch_prompt_pill(app, ui, rect);
             tablet_pencil_palette(app, ui, rect);
             tablet_osnap_chips(app, ui, rect);
             if app.canvas.show_tablet_tools_drawer {
@@ -2733,6 +2790,9 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
 }
 
 fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    if app.canvas.device_mode != DeviceMode::Desktop {
+        return;
+    }
     let t = Tokens::get();
     let is_narrow = app.canvas.device_mode == DeviceMode::Phone || rect.width() < 500.0;
 
@@ -2882,143 +2942,157 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
         });
 }
 
-fn pen_drag_keypad(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let Some(mut state) = app.canvas.pen_drag.clone() else { return };
-    let mut confirm = false;
-    let mut cancel = false;
+fn smart_dim_hud(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let Some(mut state) = app.canvas.dim_hud.clone() else { return };
+    let mut close = false;
+    let mut apply = false;
 
-    // Position: near the end of the drag, clamped inside rect so it doesn't overflow screen
-    let popup_w = 210.0;
-    let popup_h = 245.0;
-    let px = (state.screen_pos.x + 15.0).min(rect.right() - popup_w - 12.0).max(rect.left() + 12.0);
-    let py = (state.screen_pos.y - 120.0).min(rect.bottom() - popup_h - 12.0).max(rect.top() + 45.0);
-    let popup_pos = pos2(px, py);
+    let hud_w = if state.show_keypad { 240.0 } else { 290.0 };
+    // Position: floating above the bottom snap bar or mobile bar
+    let bottom_offset = if state.show_keypad { 280.0 } else { 88.0 };
+    let hud_pos = pos2(
+        (rect.center().x - hud_w / 2.0).clamp(rect.left() + 10.0, rect.right() - hud_w - 10.0),
+        rect.bottom() - bottom_offset,
+    );
 
-    egui::Area::new(egui::Id::new("pen_drag_keypad_area"))
+    egui::Area::new(egui::Id::new("smart_dim_hud_area"))
         .order(egui::Order::Foreground)
-        .fixed_pos(popup_pos)
+        .fixed_pos(hud_pos)
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
-                .fill(Color32::from_rgb(0x1e, 0x24, 0x2c))
-                .stroke(Stroke::new(1.5, Color32::from_rgb(0, 122, 255)))
-                .corner_radius(egui::CornerRadius::same(10))
-                .inner_margin(egui::Margin::same(10))
-                .shadow(egui::Shadow {
-                    offset: [0, 4],
-                    blur: 16,
-                    spread: 0,
-                    color: Color32::from_black_alpha(180),
-                })
+                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 245))
+                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 160, 255)))
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    ui.set_width(hud_w);
+                    ui.vertical(|ui| {
+                        // Header pill: shows distance & angle
+                        ui.horizontal(|ui| {
+                            let text = format!("📏 {:.2} mm  •  {:.1}°", state.distance, state.angle_deg);
+                            ui.label(RichText::new(text).font(egui::FontId::proportional(12.5)).strong().color(Color32::WHITE));
 
-                    // Header: Distance & Angle indicator
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("📏 Distance").font(egui::FontId::proportional(14.0)).color(Color32::from_rgb(0, 190, 255)).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(RichText::new("✕").font(egui::FontId::proportional(13.0)).color(Color32::GRAY)).fill(Color32::TRANSPARENT)).clicked() {
-                                cancel = true;
-                            }
-                            let deg = (state.angle_rad.to_degrees() * 10.0).round() / 10.0;
-                            ui.label(RichText::new(format!("∠ {deg}°")).font(egui::FontId::proportional(12.0)).color(Color32::from_rgb(255, 180, 0)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("✕").size(12.0).color(Color32::from_white_alpha(150))).clicked() {
+                                    close = true;
+                                }
+                                if !state.show_keypad {
+                                    let edit_btn = egui::Button::new(
+                                        RichText::new("✏️ ปรับขนาด")
+                                            .font(egui::FontId::proportional(11.5))
+                                            .color(Color32::from_rgb(0, 210, 255)),
+                                    )
+                                    .fill(Color32::from_rgb(0, 60, 110));
+
+                                    if ui.add(edit_btn).clicked() {
+                                        state.show_keypad = true;
+                                    }
+                                }
+                            });
                         });
-                    });
-                    ui.add_space(2.0);
 
-                    // Interactive Input Box with OK button
-                    ui.horizontal(|ui| {
-                        let text_resp = ui.add(
-                            egui::TextEdit::singleline(&mut state.distance_input)
-                                .font(egui::FontId::monospace(17.0))
-                                .desired_width(120.0)
-                                .text_color(Color32::WHITE)
-                                .margin(egui::Margin::symmetric(6, 4))
-                        );
-                        if text_resp.changed() {
-                            state.is_first_digit = false;
+                        // Expanded keypad if user tapped "ปรับขนาด"
+                        if state.show_keypad {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("ระยะ:").font(egui::FontId::proportional(12.0)).color(Color32::from_white_alpha(160)));
+                                let edit_frame = egui::Frame::NONE
+                                    .fill(Color32::from_black_alpha(180))
+                                    .stroke(Stroke::new(1.0, Color32::from_rgb(0, 180, 255)))
+                                    .corner_radius(egui::CornerRadius::same(4))
+                                    .inner_margin(egui::Margin::symmetric(6, 3));
+                                edit_frame.show(ui, |ui| {
+                                    ui.set_width(120.0);
+                                    ui.label(RichText::new(&state.keypad_input).font(egui::FontId::monospace(14.0)).strong().color(Color32::WHITE));
+                                });
+                                if ui.button(RichText::new("⌫").size(12.0)).clicked() {
+                                    state.keypad_input.pop();
+                                }
+                            });
+
+                            ui.add_space(4.0);
+                            // Presets
+                            ui.horizontal(|ui| {
+                                for delta in [100.0, 500.0, 1000.0] {
+                                    let label = format!("+{:.0}", delta);
+                                    if ui.add(egui::Button::new(RichText::new(label).size(11.0)).min_size(vec2(48.0, 22.0))).clicked() {
+                                        let current = state.keypad_input.parse::<f64>().unwrap_or(state.distance);
+                                        state.keypad_input = format!("{:.2}", current + delta);
+                                    }
+                                }
+                            });
+
+                            ui.add_space(4.0);
+                            // Num grid
+                            let num_buttons = [
+                                ["7", "8", "9"],
+                                ["4", "5", "6"],
+                                ["1", "2", "3"],
+                                ["0", ".", "C"],
+                            ];
+                            for row in num_buttons {
+                                ui.horizontal(|ui| {
+                                    for digit in row {
+                                        let btn = egui::Button::new(RichText::new(digit).font(egui::FontId::proportional(13.0)))
+                                            .min_size(vec2(52.0, 26.0));
+                                        if ui.add(btn).clicked() {
+                                            if digit == "C" {
+                                                state.keypad_input.clear();
+                                            } else if digit == "." {
+                                                if !state.keypad_input.contains('.') {
+                                                    state.keypad_input.push('.');
+                                                }
+                                            } else {
+                                                if state.is_first_digit {
+                                                    state.keypad_input.clear();
+                                                    state.is_first_digit = false;
+                                                }
+                                                state.keypad_input.push_str(digit);
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+
+                            ui.add_space(6.0);
+                            // Action buttons
+                            ui.horizontal(|ui| {
+                                let apply_btn = egui::Button::new(
+                                    RichText::new("↵ นำไปใช้ (Apply)")
+                                        .font(egui::FontId::proportional(12.5))
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(0, 140, 70))
+                                .min_size(vec2(hud_w - 20.0, 30.0));
+
+                                if ui.add(apply_btn).clicked() {
+                                    apply = true;
+                                }
+                            });
                         }
-                        if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            confirm = true;
-                        }
-                        let ok_btn = egui::Button::new(RichText::new("✔ OK").font(egui::FontId::proportional(14.0)).strong().color(Color32::WHITE))
-                            .fill(Color32::from_rgb(0, 150, 70))
-                            .corner_radius(egui::CornerRadius::same(5))
-                            .min_size(vec2(54.0, 28.0));
-                        if ui.add(ok_btn).clicked() {
-                            confirm = true;
-                        }
-                    });
-                    ui.add_space(4.0);
-
-                    // 4x3 Touch Numeric Keypad
-                    let btn_size = vec2(58.0, 32.0);
-                    let num_btn = |ui: &mut egui::Ui, text: &'static str| -> bool {
-                        let btn = egui::Button::new(RichText::new(text).font(egui::FontId::proportional(16.0)).color(Color32::WHITE))
-                            .fill(Color32::from_rgb(0x2d, 0x35, 0x42))
-                            .corner_radius(egui::CornerRadius::same(6));
-                        ui.add_sized(btn_size, btn).clicked()
-                    };
-
-                    egui::Grid::new("pen_keypad_grid").spacing(vec2(5.0, 5.0)).show(ui, |ui| {
-                        if num_btn(ui, "7") { append_num(&mut state, "7"); }
-                        if num_btn(ui, "8") { append_num(&mut state, "8"); }
-                        if num_btn(ui, "9") { append_num(&mut state, "9"); }
-                        ui.end_row();
-
-                        if num_btn(ui, "4") { append_num(&mut state, "4"); }
-                        if num_btn(ui, "5") { append_num(&mut state, "5"); }
-                        if num_btn(ui, "6") { append_num(&mut state, "6"); }
-                        ui.end_row();
-
-                        if num_btn(ui, "1") { append_num(&mut state, "1"); }
-                        if num_btn(ui, "2") { append_num(&mut state, "2"); }
-                        if num_btn(ui, "3") { append_num(&mut state, "3"); }
-                        ui.end_row();
-
-                        if num_btn(ui, "0") { append_num(&mut state, "0"); }
-                        if num_btn(ui, ".") { append_num(&mut state, "."); }
-                        let del_btn = egui::Button::new(RichText::new("⌫").font(egui::FontId::proportional(16.0)).color(Color32::from_rgb(255, 120, 120)))
-                            .fill(Color32::from_rgb(0x3e, 0x2e, 0x32))
-                            .corner_radius(egui::CornerRadius::same(6));
-                        if ui.add_sized(btn_size, del_btn).clicked() {
-                            state.distance_input.pop();
-                            state.is_first_digit = false;
-                        }
-                        ui.end_row();
                     });
                 });
         });
 
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        cancel = true;
-    }
-
-    if confirm {
-        if let Ok(d) = state.distance_input.trim().parse::<f64>() {
-            if d > 0.0 {
-                let final_point = state.base + Vec2::new(d * state.angle_rad.cos(), d * state.angle_rad.sin());
-                let res = app.session.input(Input::Point(final_point));
-                if let Err(e) = res {
-                    app.session.echo(e.to_string());
-                }
+    if apply {
+        if let Ok(new_dist) = state.keypad_input.parse::<f64>() {
+            if new_dist > 0.0 {
+                let rad = state.angle_deg.to_radians();
+                let new_pt = state.base + Vec2::new(new_dist * rad.cos(), new_dist * rad.sin());
+                // Rewind last point and place new adjusted point
+                let _ = app.session.undo();
+                let _ = app.session.input(Input::Point(new_pt));
             }
         }
-        app.canvas.pen_drag = None;
+        app.canvas.dim_hud = None;
         ui.ctx().request_repaint();
-    } else if cancel {
-        app.canvas.pen_drag = None;
+    } else if close {
+        app.canvas.dim_hud = None;
         ui.ctx().request_repaint();
     } else {
-        app.canvas.pen_drag = Some(state);
+        app.canvas.dim_hud = Some(state);
     }
-}
-
-fn append_num(state: &mut PenDragState, s: &str) {
-    if state.is_first_digit {
-        state.distance_input.clear();
-        state.is_first_digit = false;
-    }
-    state.distance_input.push_str(s);
 }
 
 fn mobile_bottom_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
@@ -3211,29 +3285,153 @@ fn mobile_tools_sheet(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
         });
 }
 
+fn touch_prompt_pill(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let Some(prompt) = app.session.current_prompt() else { return };
+    let msg = crate::i18n::t(&prompt.message);
+    let mut cancel = false;
+    let mut enter = false;
+
+    // Centered at top of canvas, below the top bar
+    let w = ((msg.len() as f32 * 8.5) + 120.0).clamp(210.0, 520.0);
+    let pos = pos2(
+        (rect.center().x - w / 2.0).clamp(rect.left() + 60.0, (rect.right() - w - 10.0).max(rect.left() + 60.0)),
+        rect.top() + 38.0,
+    );
+
+    egui::Area::new(egui::Id::new("touch_prompt_pill_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_premultiplied(18, 24, 38, 245))
+                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 160, 255)))
+                .corner_radius(egui::CornerRadius::same(16))
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, |ui| {
+                    ui.set_width(w - 20.0);
+                    ui.horizontal_centered(|ui| {
+                        ui.label(RichText::new("📍").font(egui::FontId::proportional(13.0)));
+                        ui.label(
+                            RichText::new(msg)
+                                .font(egui::FontId::proportional(12.0))
+                                .strong()
+                                .color(Color32::WHITE),
+                        );
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let cancel_btn = egui::Button::new(
+                                RichText::new("✕")
+                                    .font(egui::FontId::proportional(11.5))
+                                    .color(Color32::from_rgb(255, 140, 140)),
+                            )
+                            .fill(Color32::from_rgb(60, 20, 25))
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .min_size(vec2(24.0, 22.0));
+
+                            if ui.add(cancel_btn).on_hover_text("ยกเลิกคำสั่ง (Cancel / Esc)").clicked() {
+                                cancel = true;
+                            }
+
+                            if prompt.base.is_some() {
+                                let done_btn = egui::Button::new(
+                                    RichText::new("↵ เสร็จ")
+                                        .font(egui::FontId::proportional(11.5))
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(0, 130, 70))
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .min_size(vec2(48.0, 22.0));
+
+                                if ui.add(done_btn).on_hover_text("เสร็จสิ้นการเขียน (Done / Enter)").clicked() {
+                                    enter = true;
+                                }
+                            }
+                        });
+                    });
+                });
+        });
+
+    if cancel {
+        app.session.cancel();
+        ui.ctx().request_repaint();
+    } else if enter {
+        let _ = app.session.input(Input::Enter);
+        ui.ctx().request_repaint();
+    }
+}
+
 fn tablet_pencil_palette(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let t = Tokens::get();
-    let pos = pos2(rect.left() + 12.0, rect.top() + 56.0);
+    let pos = pos2(rect.left() + 10.0, rect.top() + 50.0);
 
     egui::Area::new(egui::Id::new("tablet_pencil_palette_area"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
-                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 235))
-                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 140, 255)))
-                .corner_radius(egui::CornerRadius::same(12))
-                .inner_margin(egui::Margin::symmetric(4, 8))
+                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 240))
+                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 150, 255)))
+                .corner_radius(egui::CornerRadius::same(14))
+                .inner_margin(egui::Margin::symmetric(4, 7))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(0.0, 5.0);
+                        ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
 
                         // Header / Pen badge
-                        ui.label(RichText::new("✏️").font(egui::FontId::proportional(14.0)).color(Color32::from_rgb(0, 200, 255)));
+                        ui.label(RichText::new("✏️").font(egui::FontId::proportional(14.0)).color(Color32::from_rgb(0, 210, 255)));
                         ui.add_space(2.0);
 
+                        let is_prompting = app.session.prompting();
+                        let is_pan = app.canvas.touch_nav_mode == TouchNavMode::Pan;
+
+                        // 1. Select / Cancel
+                        let sel_btn = egui::Button::new(
+                            RichText::new("↖")
+                                .font(egui::FontId::proportional(16.0))
+                                .color(if !is_prompting && !is_pan { Color32::WHITE } else { t.text }),
+                        )
+                        .min_size(vec2(38.0, 34.0))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .fill(if !is_prompting && !is_pan { Color32::from_rgb(0, 110, 220) } else { Color32::from_white_alpha(15) });
+
+                        if ui.add(sel_btn).on_hover_text("เลือก / ปล่อยคำสั่ง (Select / Esc)").clicked() {
+                            app.session.cancel();
+                            app.canvas.touch_nav_mode = TouchNavMode::Draw;
+                        }
+
+                        // 2. Pan Mode toggle
+                        let pan_btn = egui::Button::new(
+                            RichText::new("✋")
+                                .font(egui::FontId::proportional(15.0))
+                                .color(if is_pan { Color32::from_rgb(0, 220, 255) } else { t.text }),
+                        )
+                        .min_size(vec2(38.0, 34.0))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .fill(if is_pan { Color32::from_rgb(18, 60, 100) } else { Color32::from_white_alpha(15) });
+
+                        if ui.add(pan_btn).on_hover_text("สลับโหมดเลื่อนหน้าจอ (1-Finger Pan)").clicked() {
+                            app.canvas.touch_nav_mode = if is_pan { TouchNavMode::Draw } else { TouchNavMode::Pan };
+                        }
+
+                        // 3. Zoom Extents / Fit
+                        let fit_btn = egui::Button::new(
+                            RichText::new("⛶")
+                                .font(egui::FontId::proportional(15.0))
+                                .color(t.text),
+                        )
+                        .min_size(vec2(38.0, 34.0))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .fill(Color32::from_white_alpha(15));
+
+                        if ui.add(fit_btn).on_hover_text("ซูมพอดีหน้าจอ (Zoom Extents)").clicked() {
+                            let _ = app.session.zoom_extents();
+                        }
+
+                        ui.separator();
+
+                        // 4. Drawing Tools
                         let pencil_tools = [
-                            ("↖", "cancel", "เลือก / ปล่อยคำสั่ง (Select / Esc)"),
                             ("📏", "line", "เส้นตรง (Line)"),
                             ("〰️", "pline", "โพลีไลน์ (Polyline)"),
                             ("⭕", "circle", "วงกลม (Circle)"),
@@ -3243,42 +3441,34 @@ fn tablet_pencil_palette(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                             ("📐", "dimlinear", "บอกขนาด (Dimension)"),
                         ];
 
-                        let is_prompting = app.session.prompting();
-
                         for (icon, cmd, tip) in pencil_tools {
-                            let is_active = if cmd == "cancel" {
-                                !is_prompting
-                            } else {
-                                false
-                            };
-
                             let btn = egui::Button::new(
                                 RichText::new(icon)
                                     .font(egui::FontId::proportional(15.0))
-                                    .color(if is_active { Color32::WHITE } else { t.text }),
+                                    .color(t.text),
                             )
-                            .min_size(vec2(34.0, 32.0))
-                            .fill(if is_active { Color32::from_rgb(0, 110, 220) } else { Color32::from_white_alpha(15) });
+                            .min_size(vec2(38.0, 34.0))
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .fill(Color32::from_white_alpha(15));
 
                             if ui.add(btn).on_hover_text(tip).clicked() {
-                                if cmd == "cancel" {
-                                    app.session.cancel();
-                                } else {
-                                    app.start(cmd);
-                                }
+                                app.start(cmd);
                                 app.canvas.touch_nav_mode = TouchNavMode::Draw;
                             }
                         }
 
-                        ui.add_space(4.0);
+                        ui.add_space(2.0);
+                        ui.separator();
+
                         // All Tools Drawer Toggle
                         let is_drawer_open = app.canvas.show_tablet_tools_drawer;
                         let all_btn = egui::Button::new(
                             RichText::new("▦")
-                                .font(egui::FontId::proportional(14.0))
+                                .font(egui::FontId::proportional(15.0))
                                 .color(if is_drawer_open { Color32::from_rgb(0, 220, 150) } else { t.text_dim }),
                         )
-                        .min_size(vec2(34.0, 32.0))
+                        .min_size(vec2(38.0, 34.0))
+                        .corner_radius(egui::CornerRadius::same(8))
                         .fill(if is_drawer_open { Color32::from_rgb(0, 70, 50) } else { Color32::from_white_alpha(15) });
 
                         if ui.add(all_btn).on_hover_text("เปิดแคตตาล็อกเครื่องมือทั้งหมด (All Tool Sets)").clicked() {
@@ -3290,7 +3480,11 @@ fn tablet_pencil_palette(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
 }
 
 fn tablet_osnap_chips(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let pos = pos2(rect.left() + 66.0, rect.top() + 10.0);
+    let chips_w = 420.0;
+    let pos = pos2(
+        (rect.center().x - chips_w / 2.0).clamp(rect.left() + 60.0, (rect.right() - chips_w - 10.0).max(rect.left() + 60.0)),
+        rect.bottom() - 44.0,
+    );
     use cadcraft_engine::snap::mode;
 
     egui::Area::new(egui::Id::new("tablet_osnap_chips_area"))
@@ -3298,10 +3492,10 @@ fn tablet_osnap_chips(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
         .fixed_pos(pos)
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
-                .fill(Color32::from_rgba_premultiplied(16, 20, 28, 220))
-                .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
-                .corner_radius(egui::CornerRadius::same(6))
-                .inner_margin(egui::Margin::symmetric(6, 4))
+                .fill(Color32::from_rgba_premultiplied(16, 20, 28, 235))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(35)))
+                .corner_radius(egui::CornerRadius::same(15))
+                .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
@@ -3321,12 +3515,13 @@ fn tablet_osnap_chips(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                             let is_active = osnap_on && (current_osmode & bit != 0);
                             let chip = egui::Button::new(
                                 RichText::new(label)
-                                    .font(egui::FontId::proportional(11.0))
+                                    .font(egui::FontId::proportional(11.5))
                                     .strong()
-                                    .color(if is_active { Color32::from_rgb(220, 245, 255) } else { Color32::from_white_alpha(140) }),
+                                    .color(if is_active { Color32::from_rgb(220, 245, 255) } else { Color32::from_white_alpha(150) }),
                             )
-                            .min_size(vec2(54.0, 22.0))
-                            .fill(if is_active { Color32::from_rgb(0, 95, 180) } else { Color32::from_white_alpha(15) });
+                            .min_size(vec2(56.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .fill(if is_active { Color32::from_rgb(0, 100, 200) } else { Color32::from_white_alpha(15) });
 
                             if ui.add(chip).on_hover_text(format!("Osnap: {}\n(แตะเพื่อเปิด/ปิด)", tip)).clicked() {
                                 // Toggle bit and ensure Osnap is ON
@@ -3340,11 +3535,12 @@ fn tablet_osnap_chips(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                         let ortho_on = app.session.settings.orthomode;
                         let ortho_chip = egui::Button::new(
                             RichText::new("📐 ORTHO")
-                                .font(egui::FontId::proportional(11.0))
+                                .font(egui::FontId::proportional(11.5))
                                 .strong()
-                                .color(if ortho_on { Color32::WHITE } else { Color32::from_white_alpha(140) }),
+                                .color(if ortho_on { Color32::WHITE } else { Color32::from_white_alpha(150) }),
                         )
-                        .min_size(vec2(66.0, 22.0))
+                        .min_size(vec2(68.0, 28.0))
+                        .corner_radius(egui::CornerRadius::same(8))
                         .fill(if ortho_on { Color32::from_rgb(0, 150, 90) } else { Color32::from_white_alpha(15) });
 
                         if ui.add(ortho_chip).on_hover_text("Ortho Mode (ล็อคแกนมุมฉาก 90°)\n(แตะเพื่อเปิด/ปิด)").clicked() {

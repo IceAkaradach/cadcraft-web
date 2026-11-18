@@ -318,7 +318,8 @@ impl CadApp {
                 let _ = self.ui.docking.set_visible(docking::Panel::Layers, false);
                 self.ui.show_toolsets = false;
                 self.ui.show_palettes = false;
-                self.ui.history_lines = 1;
+                self.ui.show_command_line = false;
+                self.ui.history_lines = 0;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Pan;
             }
             canvas::DeviceMode::Tablet => {
@@ -327,7 +328,8 @@ impl CadApp {
                 let _ = self.ui.docking.set_visible(docking::Panel::Layers, false);
                 self.ui.show_toolsets = false;
                 self.ui.show_palettes = false;
-                self.ui.history_lines = 1;
+                self.ui.show_command_line = false;
+                self.ui.history_lines = 0;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
             }
             canvas::DeviceMode::Desktop => {
@@ -336,6 +338,7 @@ impl CadApp {
                 let _ = self.ui.docking.set_visible(docking::Panel::Layers, true);
                 self.ui.show_toolsets = true;
                 self.ui.show_palettes = true;
+                self.ui.show_command_line = true;
                 self.ui.history_lines = 3;
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
                 self.canvas.pen_drag = None;
