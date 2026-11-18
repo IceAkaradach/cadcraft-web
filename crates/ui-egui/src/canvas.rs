@@ -2601,13 +2601,15 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
 
 fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let t = Tokens::get();
-    let is_narrow = rect.width() < 600.0;
+    let is_narrow = rect.width() < 500.0;
 
-    // Position: bottom right on mobile/narrow screens, right-center edge on tablet/desktop (AutoCAD style)
+    // Position: top-left on narrow mobile screens (below viewport title),
+    // right-edge BELOW the ViewCube (which occupies rect.top() + 20..175) on tablet and desktop.
     let at = if is_narrow {
-        pos2((rect.center().x - 145.0).max(rect.left() + 8.0), rect.bottom() - 44.0)
+        pos2(rect.left() + 10.0, rect.top() + 45.0)
     } else {
-        pos2(rect.right() - 46.0, rect.top() + 80.0)
+        let y = (rect.top() + 185.0).min(rect.bottom() - 260.0).max(rect.top() + 40.0);
+        pos2(rect.right() - 44.0, y)
     };
 
     egui::Area::new(egui::Id::new("canvas_navigation_bar_area"))
