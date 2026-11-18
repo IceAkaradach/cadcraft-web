@@ -1330,8 +1330,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     // ---------- input ----------
     let (hover_pos, scroll, mods, middle_down, pressed_primary, pressed_secondary, dbl_middle, dbl_primary) = ui.input(|i| {
+        let hp = i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()).or_else(|| i.pointer.latest_pos());
         (
-            i.pointer.hover_pos(),
+            hp,
             i.smooth_scroll_delta,
             i.modifiers,
             i.pointer.middle_down(),
@@ -1341,7 +1342,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             i.pointer.button_double_clicked(egui::PointerButton::Primary),
         )
     });
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && (resp.hovered() || resp.clicked() || resp.dragged() || resp.drag_stopped());
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -1619,7 +1620,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 
     let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!is_intentional_drag || !allow_touch_keypad) && !is_multi_touching;
-    let pressed_primary = (pressed_primary || drag_clicked) && !is_multi_touching;
+    let pressed_primary = (pressed_primary || drag_clicked || resp.clicked_by(egui::PointerButton::Primary)) && !is_multi_touching;
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
@@ -1707,7 +1708,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
     }
-    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    let pen_drag_paused = app.canvas.pen_drag.as_ref().is_some_and(|pd| pd.is_paused);
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl && !pen_drag_paused;
     // Clicks.
     if inside
         && pressed_primary
@@ -2926,7 +2928,10 @@ fn pen_drag_overlay(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {
                         let text = format!("📏 {:.1} mm  ∠ {:.0}°", state.distance, state.angle_rad.to_degrees());
-                        ui.label(RichText::new(text).font(egui::FontId::proportional(12.0)).strong().color(Color32::WHITE));
+                        let tag_lbl = egui::Label::new(RichText::new(text).font(egui::FontId::proportional(12.0)).strong().color(Color32::WHITE)).sense(egui::Sense::click());
+                        if ui.add(tag_lbl).on_hover_text("แตะเพื่อหยุดและใส่ตัวเลขขนาด (Tap to enter dimension)").clicked() {
+                            state.is_paused = true;
+                        }
                     });
             });
 
