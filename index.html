@@ -13,7 +13,7 @@
   
 <script type="module">
 import init, * as bindings from './cadcraft-web-7f2cd4254121ddbd.js';
-const wasm = await init({ module_or_path: './cadcraft-web-df27b24e100e9241_bg.wasm' });
+const wasm = await init({ module_or_path: './cadcraft-web-9f040c89485bfee3_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -28,7 +28,11 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       padding: 0;
       width: 100%;
       height: 100%;
+      height: 100dvh;
+      height: -webkit-fill-available;
       overflow: hidden;
+      position: fixed;
+      inset: 0;
       background: #22282f;
       touch-action: none;
       overscroll-behavior: none;
@@ -37,11 +41,15 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       user-select: none;
     }
     #cadcraft_canvas {
-      position: fixed;
+      position: absolute;
       top: 0;
       left: 0;
-      width: 100vw;
-      height: 100vh;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      height: -webkit-fill-available;
       display: block;
       touch-action: none;
       outline: none;
@@ -58,11 +66,37 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       pointer-events: none;
     }
   </style>
-<link rel="modulepreload" href="./cadcraft-web-7f2cd4254121ddbd.js" crossorigin="anonymous" integrity="sha384-8QrWLDV/6tFU3sHu5kx9b4qkNyoQIEPBeWcY9CMyNHnwATQ4Ob910M7zOASKtq26"><link rel="preload" href="./cadcraft-web-df27b24e100e9241_bg.wasm" crossorigin="anonymous" integrity="sha384-/IrMbKsv+zfn9mgkr3639HoDms03M2544U1lD+nwZDLl1rpZ5rV8klNfpmt4FkKS" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="./cadcraft-web-7f2cd4254121ddbd.js" crossorigin="anonymous" integrity="sha384-8QrWLDV/6tFU3sHu5kx9b4qkNyoQIEPBeWcY9CMyNHnwATQ4Ob910M7zOASKtq26"><link rel="preload" href="./cadcraft-web-9f040c89485bfee3_bg.wasm" crossorigin="anonymous" integrity="sha384-Lnigvl9jp7afDnSCs6AaIYhsNnv2pIlOVQMWvD40/Md4pvb0laAqpNcl1LyOWT+l" as="fetch" type="application/wasm"></head>
 <body>
   <canvas id="cadcraft_canvas"></canvas>
   <div id="cadcraft_loading">Loading CADCraft&hellip;</div>
   <script>
+    // Precision viewport sync for iPad / Tablet / Mobile Safari
+    function syncViewport() {
+      const vv = window.visualViewport;
+      const w = vv ? vv.width : window.innerWidth;
+      const h = vv ? vv.height : window.innerHeight;
+      const canvas = document.getElementById('cadcraft_canvas');
+      if (canvas) {
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+      }
+      document.body.style.width = w + 'px';
+      document.body.style.height = h + 'px';
+    }
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', () => {
+      setTimeout(syncViewport, 80);
+      setTimeout(syncViewport, 250);
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncViewport);
+      window.visualViewport.addEventListener('scroll', syncViewport);
+    }
+    window.addEventListener('DOMContentLoaded', syncViewport);
+    window.addEventListener('load', syncViewport);
+    syncViewport();
+
     // Optimize for Stylus / Pen & Touch devices (Apple Pencil, Samsung S-Pen, Surface Pen)
     document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
     document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
