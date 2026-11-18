@@ -136,6 +136,44 @@ pub struct CanvasState {
     pub touch_nav_mode: TouchNavMode,
     /// Floating pen/touch drag dimension input popup state.
     pub pen_drag: Option<PenDragState>,
+    /// Device experience mode (Phone, Tablet, Desktop).
+    pub device_mode: DeviceMode,
+    /// Whether to show the device mode selection modal.
+    pub show_device_modal: bool,
+}
+
+/// Device experience mode for customized UI layout and touch/mouse logic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceMode {
+    Phone,
+    #[default]
+    Tablet,
+    Desktop,
+}
+
+impl DeviceMode {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Phone => "phone",
+            Self::Tablet => "tablet",
+            Self::Desktop => "desktop",
+        }
+    }
+    pub fn from_id(id: &str) -> Self {
+        match id {
+            "phone" => Self::Phone,
+            "desktop" => Self::Desktop,
+            _ => Self::Tablet,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Phone => "📱 Phone",
+            Self::Tablet => "📟 Tablet",
+            Self::Desktop => "💻 Desktop",
+        }
+    }
 }
 
 /// State for the floating touch/pen drag distance and angle keypad.
@@ -1519,11 +1557,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && !app.session.realtime_zoom_active();
 
     let press_origin = ui.input(|i| i.pointer.press_origin());
+    let allow_touch_keypad = app.canvas.device_mode != DeviceMode::Desktop;
     let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 14.0);
 
     // Intentional pen/touch drag during a point prompt:
-    // When released, pause and open the touch dimension keypad instead of immediately placing the point.
-    if point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag {
+    // When released on touch/tablet/phone, pause and open the touch dimension keypad instead of immediately placing the point.
+    if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag {
         let orig = press_origin.unwrap_or(rect.center());
         let end_hp = hover_pos.unwrap_or(orig);
         let end_w = effective_point(app, xf.to_world(end_hp), &xf, ui.ctx());
@@ -1556,7 +1595,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
 
-    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && !is_intentional_drag;
+    let drag_clicked = point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary) && (!is_intentional_drag || !allow_touch_keypad);
     let pressed_primary = (pressed_primary || drag_clicked) && app.canvas.pen_drag.is_none();
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
@@ -2659,14 +2698,14 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
 
 fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let t = Tokens::get();
-    let is_narrow = rect.width() < 500.0;
+    let is_narrow = app.canvas.device_mode == DeviceMode::Phone || rect.width() < 500.0;
 
     // Position: top-left on narrow mobile screens (below viewport title),
     // right-edge BELOW the ViewCube (which occupies rect.top() + 20..175) on tablet and desktop.
     let at = if is_narrow {
         pos2(rect.left() + 10.0, rect.top() + 45.0)
     } else {
-        let y = (rect.top() + 185.0).min(rect.bottom() - 260.0).max(rect.top() + 40.0);
+        let y = (rect.top() + 185.0).min(rect.bottom() - 290.0).max(rect.top() + 40.0);
         pos2(rect.right() - 44.0, y)
     };
 
@@ -2778,6 +2817,23 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                         .fill(Color32::TRANSPARENT);
                         if ui.add(prop_btn).on_hover_text("Toggle Properties / Layers").clicked() {
                             app.ui.show_palettes = !app.ui.show_palettes;
+                        }
+
+                        // 8. Device Experience Mode switcher
+                        let mode_icon = match app.canvas.device_mode {
+                            DeviceMode::Phone => "📱",
+                            DeviceMode::Tablet => "📟",
+                            DeviceMode::Desktop => "💻",
+                        };
+                        let mode_btn = egui::Button::new(
+                            RichText::new(mode_icon)
+                                .font(egui::FontId::proportional(13.0))
+                                .color(Color32::from_rgb(0, 200, 255)),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(Color32::TRANSPARENT);
+                        if ui.add(mode_btn).on_hover_text(format!("Device Mode: {}\nClick to switch mode", app.canvas.device_mode.label())).clicked() {
+                            app.canvas.show_device_modal = true;
                         }
                     };
 
@@ -3029,6 +3085,140 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
         }
     }
     None
+}
+
+/// Device experience selection modal dialog.
+pub fn device_mode_modal(app: &mut CadApp, ctx: &egui::Context) {
+    if !app.canvas.show_device_modal {
+        return;
+    }
+    let t = Tokens::get();
+    let mut selected_mode = None;
+    let mut close = false;
+
+    egui::Modal::new(egui::Id::new("cc_device_mode_modal")).show(ctx, |ui| {
+        let is_compact = ui.available_width() < 540.0;
+        let modal_w = if is_compact { 320.0 } else { 580.0 };
+        ui.set_width(modal_w);
+
+        ui.vertical_centered(|ui| {
+            ui.add_space(6.0);
+            ui.heading(RichText::new("เลือกโหมดการใช้งาน / Select Device Mode").size(17.0).strong().color(Color32::WHITE));
+            ui.add_space(2.0);
+            ui.label(RichText::new("ปรับแต่งการควบคุมและการแสดงผลให้เหมาะกับอุปกรณ์ของคุณ").size(12.5).color(t.text_dim));
+            ui.add_space(12.0);
+        });
+
+        let modes = [
+            (
+                DeviceMode::Phone,
+                "📱",
+                "Phone (มือถือ)",
+                "หน้าจอเต็ม ซ่อนแถบเครื่องมือ\nเลื่อนดูแบบด้วยนิ้วเดียว (Pan)\nปุ่มกดระยะสัมผัสลอย",
+            ),
+            (
+                DeviceMode::Tablet,
+                "📟",
+                "Tablet (iPad / ปากกา)",
+                "เหมาะสำหรับ Apple Pencil\nลากเส้นแล้วหยุดใส่ค่า (Keypad)\nย่อ/ขยาย 2 นิ้ว + ถาดเครื่องมือ",
+            ),
+            (
+                DeviceMode::Desktop,
+                "💻",
+                "Desktop (คอมพิวเตอร์)",
+                "คลาสสิกสไตล์ AutoCAD ครบชุด\nคลิกลากเลือกวัตถุ (Window Select)\nล้อเมาส์ ย่อขยาย พร้อมคีย์ลัด",
+            ),
+        ];
+
+        let render_card = |ui: &mut egui::Ui, mode: DeviceMode, icon: &str, title: &str, desc: &str, card_w: f32| {
+            let is_current = app.canvas.device_mode == mode;
+            let card_bg = if is_current {
+                Color32::from_rgb(26, 42, 68)
+            } else {
+                Color32::from_rgb(30, 32, 38)
+            };
+            let stroke = if is_current {
+                Stroke::new(2.0, Color32::from_rgb(0, 150, 255))
+            } else {
+                Stroke::new(1.0, Color32::from_white_alpha(35))
+            };
+
+            let frame = egui::Frame::NONE
+                .fill(card_bg)
+                .stroke(stroke)
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(12));
+
+            let response = frame.show(ui, |ui| {
+                ui.set_width(card_w);
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon).size(22.0));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(title).size(14.0).strong().color(if is_current { Color32::from_rgb(0, 190, 255) } else { Color32::WHITE }));
+                    });
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(desc).size(11.5).color(Color32::from_rgb(200, 205, 215)));
+                    ui.add_space(10.0);
+                    let btn_text = if is_current { "✓ ใช้งานโหมดนี้" } else { "เลือกโหมดนี้" };
+                    let btn = egui::Button::new(RichText::new(btn_text).size(12.0).strong().color(Color32::WHITE))
+                        .fill(if is_current { Color32::from_rgb(0, 122, 255) } else { Color32::from_white_alpha(30) })
+                        .min_size(vec2(card_w - 24.0, 26.0));
+                    if ui.add(btn).clicked() {
+                        return true;
+                    }
+                    false
+                }).inner
+            });
+
+            response.inner
+        };
+
+        if is_compact {
+            ui.vertical(|ui| {
+                for (mode, icon, title, desc) in modes {
+                    if render_card(ui, mode, icon, title, desc, modal_w - 24.0) {
+                        selected_mode = Some(mode);
+                    }
+                    ui.add_space(8.0);
+                }
+            });
+        } else {
+            ui.horizontal(|ui| {
+                let card_w = (modal_w - 40.0) / 3.0;
+                for (mode, icon, title, desc) in modes {
+                    if render_card(ui, mode, icon, title, desc, card_w) {
+                        selected_mode = Some(mode);
+                    }
+                    ui.add_space(6.0);
+                }
+            });
+        }
+
+        ui.add_space(14.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(egui::Button::new(RichText::new("เริ่มใช้งาน / Continue").strong().color(Color32::WHITE))
+                .fill(Color32::from_rgb(0, 122, 255))
+                .min_size(vec2(120.0, 28.0))).clicked()
+            {
+                close = true;
+            }
+            ui.label(RichText::new("เปลี่ยนโหมดได้ตลอดเวลาจากเมนูด้านบน").size(11.5).color(t.text_dim));
+        });
+
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+    });
+
+    if let Some(mode) = selected_mode {
+        app.apply_device_mode(mode);
+        app.canvas.show_device_modal = false;
+        ctx.request_repaint();
+    } else if close {
+        app.canvas.show_device_modal = false;
+        ctx.request_repaint();
+    }
 }
 
 #[cfg(test)]

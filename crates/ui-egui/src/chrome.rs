@@ -95,11 +95,13 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             let size = 26.0;
             let mut clicked = None;
             let mac = ui.ctx().os().is_mac();
+
+            let mode_btn_w = if row.width() < 480.0 { 32.0 } else { 92.0 };
             let widths: Vec<_> = TOOLBAR.iter().map(|group| group.len() as f32 * (size + 6.0) - 6.0).collect();
-            let available = (row.right() - 12.0 - x).max(0.0);
+            let available = (row.right() - mode_btn_w - 18.0 - x).max(0.0);
             let Some(fit) = craft_ui::layout::fit_toolbar(&widths, available, 24.0, 30.0) else {
                 // Very small windows still expose the complete command row by scrolling.
-                ui.scope_builder(egui::UiBuilder::new().max_rect(row.shrink2(vec2(4.0, 0.0))), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.left() + 4.0, row.top()), pos2(row.right() - mode_btn_w - 12.0, row.bottom()))), |ui| {
                     egui::ScrollArea::horizontal().id_salt("toolbar_small").show(ui, |ui| {
                         ui.horizontal(|ui| {
                             for group in TOOLBAR {
@@ -167,6 +169,36 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
                 response.on_hover_text(crate::tl!("More toolbar commands"));
             }
+
+            // Right-aligned Device Experience Mode button
+            let mode_rect = Rect::from_min_size(pos2(row.right() - mode_btn_w - 8.0, row.center().y - 12.0), vec2(mode_btn_w, 24.0));
+            let mode_resp = ui.interact(mode_rect, ui.id().with("tb_device_mode_btn"), Sense::click());
+            if mode_resp.hovered() {
+                ui.painter().rect_filled(mode_rect, 4.0, t.control_hover.gamma_multiply(0.6));
+            } else {
+                ui.painter().rect_filled(mode_rect, 4.0, egui::Color32::from_white_alpha(18));
+            }
+            ui.painter().rect_stroke(mode_rect, 4.0, Stroke::new(1.0, egui::Color32::from_white_alpha(30)), egui::StrokeKind::Inside);
+
+            let mode_text = if row.width() < 480.0 {
+                match app.canvas.device_mode {
+                    crate::canvas::DeviceMode::Phone => "📱",
+                    crate::canvas::DeviceMode::Tablet => "📟",
+                    crate::canvas::DeviceMode::Desktop => "💻",
+                }
+            } else {
+                match app.canvas.device_mode {
+                    crate::canvas::DeviceMode::Phone => "📱 Phone ▾",
+                    crate::canvas::DeviceMode::Tablet => "📟 Tablet ▾",
+                    crate::canvas::DeviceMode::Desktop => "💻 Desktop ▾",
+                }
+            };
+            let galley = ui.painter().layout_no_wrap(mode_text.into(), egui::FontId::proportional(11.5), t.text);
+            ui.painter().galley(pos2(mode_rect.center().x - galley.size().x / 2.0, mode_rect.center().y - galley.size().y / 2.0), galley, t.text);
+            if mode_resp.on_hover_text(format!("Mode: {}\nClick to switch mode (Phone / Tablet / Desktop)", app.canvas.device_mode.label())).clicked() {
+                app.canvas.show_device_modal = true;
+            }
+
             if let Some(c) = clicked {
                 app.start(c);
             }

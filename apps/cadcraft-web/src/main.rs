@@ -46,6 +46,7 @@ mod web {
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
             storage.set_string(cadcraft_ui_egui::options::PROFILE_KEY, self.0.profile_json());
             storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.0.prefs_json());
+            storage.set_string("cadcraft.device_mode", self.0.canvas.device_mode.id().to_string());
             // Web autosave: preserve unsaved drawing in browser storage.
             if let Ok(doc) = self.0.session.doc() {
                 if !doc.model.is_empty() {
@@ -142,6 +143,25 @@ mod web {
                         }
                         if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                             app.load_prefs(&prefs);
+                        }
+                        let saved_mode = cc.storage.and_then(|s| s.get_string("cadcraft.device_mode"));
+                        if let Some(mode_param) = query_param("mode") {
+                            app.apply_device_mode(cadcraft_ui_egui::canvas::DeviceMode::from_id(&mode_param));
+                            app.canvas.show_device_modal = false;
+                        } else if let Some(mode_id) = saved_mode {
+                            app.apply_device_mode(cadcraft_ui_egui::canvas::DeviceMode::from_id(&mode_id));
+                            app.canvas.show_device_modal = false;
+                        } else {
+                            let width = web_sys::window().and_then(|w| w.inner_width().ok()).and_then(|v| v.as_f64()).unwrap_or(1024.0);
+                            let default_mode = if width < 600.0 {
+                                cadcraft_ui_egui::canvas::DeviceMode::Phone
+                            } else if width < 1200.0 {
+                                cadcraft_ui_egui::canvas::DeviceMode::Tablet
+                            } else {
+                                cadcraft_ui_egui::canvas::DeviceMode::Desktop
+                            };
+                            app.apply_device_mode(default_mode);
+                            app.canvas.show_device_modal = true;
                         }
                         // `?cpu`: no render state for the app, so the canvas draws with egui shapes.
                         if !crate::wants_cpu(&query())

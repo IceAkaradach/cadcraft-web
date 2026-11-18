@@ -308,6 +308,41 @@ impl CadApp {
         self
     }
 
+    /// Apply device experience mode (Phone, Tablet, Desktop) adjusting layouts and controls.
+    pub fn apply_device_mode(&mut self, mode: canvas::DeviceMode) {
+        self.canvas.device_mode = mode;
+        match mode {
+            canvas::DeviceMode::Phone => {
+                let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, false);
+                let _ = self.ui.docking.set_visible(docking::Panel::Properties, false);
+                let _ = self.ui.docking.set_visible(docking::Panel::Layers, false);
+                self.ui.show_toolsets = false;
+                self.ui.show_palettes = false;
+                self.ui.history_lines = 1;
+                self.canvas.touch_nav_mode = canvas::TouchNavMode::Pan;
+            }
+            canvas::DeviceMode::Tablet => {
+                let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, true);
+                let _ = self.ui.docking.set_visible(docking::Panel::Properties, false);
+                let _ = self.ui.docking.set_visible(docking::Panel::Layers, false);
+                self.ui.show_toolsets = true;
+                self.ui.show_palettes = false;
+                self.ui.history_lines = 2;
+                self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
+            }
+            canvas::DeviceMode::Desktop => {
+                let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, true);
+                let _ = self.ui.docking.set_visible(docking::Panel::Properties, true);
+                let _ = self.ui.docking.set_visible(docking::Panel::Layers, true);
+                self.ui.show_toolsets = true;
+                self.ui.show_palettes = true;
+                self.ui.history_lines = 3;
+                self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
+                self.canvas.pen_drag = None;
+            }
+        }
+    }
+
     /// Run a command programmatically (or a UI command).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
@@ -644,6 +679,7 @@ impl CadApp {
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
+        canvas::device_mode_modal(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 
