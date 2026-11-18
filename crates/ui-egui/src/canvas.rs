@@ -140,6 +140,10 @@ pub struct CanvasState {
     pub device_mode: DeviceMode,
     /// Whether to show the device mode selection modal.
     pub show_device_modal: bool,
+    /// Whether to show the full-screen platform card selection screen before entering workspace.
+    pub show_platform_picker: bool,
+    /// Whether to remember choice and auto-enter workspace directly on next visit.
+    pub auto_enter_workspace: bool,
 }
 
 /// Device experience mode for customized UI layout and touch/mouse logic.
@@ -2833,7 +2837,7 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                         .min_size(vec2(28.0, 26.0))
                         .fill(Color32::TRANSPARENT);
                         if ui.add(mode_btn).on_hover_text(format!("Device Mode: {}\nClick to switch mode", app.canvas.device_mode.label())).clicked() {
-                            app.canvas.show_device_modal = true;
+                            app.canvas.show_platform_picker = true;
                         }
                     };
 
@@ -3087,137 +3091,276 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
     None
 }
 
-/// Device experience selection modal dialog.
-pub fn device_mode_modal(app: &mut CadApp, ctx: &egui::Context) {
-    if !app.canvas.show_device_modal {
-        return;
-    }
+/// Full-screen UI Card platform selection screen shown before entering the workspace.
+pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
-    let mut selected_mode = None;
+    let mut chosen_mode = None;
     let mut close = false;
 
-    egui::Modal::new(egui::Id::new("cc_device_mode_modal")).show(ctx, |ui| {
-        let is_compact = ui.available_width() < 540.0;
-        let modal_w = if is_compact { 320.0 } else { 580.0 };
-        ui.set_width(modal_w);
+    // Fill the window background with dark CAD theme
+    let full_rect = ui.max_rect();
+    ui.painter().rect_filled(full_rect, 0.0, Color32::from_rgb(14, 16, 22));
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(6.0);
-            ui.heading(RichText::new("เลือกโหมดการใช้งาน / Select Device Mode").size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(2.0);
-            ui.label(RichText::new("ปรับแต่งการควบคุมและการแสดงผลให้เหมาะกับอุปกรณ์ของคุณ").size(12.5).color(t.text_dim));
-            ui.add_space(12.0);
-        });
+    let available_w = ui.available_width();
+    let is_narrow = available_w < 780.0;
+    let can_close = !app.session.docs.is_empty();
 
-        let modes = [
-            (
-                DeviceMode::Phone,
-                "📱",
-                "Phone (มือถือ)",
-                "หน้าจอเต็ม ซ่อนแถบเครื่องมือ\nเลื่อนดูแบบด้วยนิ้วเดียว (Pan)\nปุ่มกดระยะสัมผัสลอย",
-            ),
-            (
-                DeviceMode::Tablet,
-                "📟",
-                "Tablet (iPad / ปากกา)",
-                "เหมาะสำหรับ Apple Pencil\nลากเส้นแล้วหยุดใส่ค่า (Keypad)\nย่อ/ขยาย 2 นิ้ว + ถาดเครื่องมือ",
-            ),
-            (
-                DeviceMode::Desktop,
-                "💻",
-                "Desktop (คอมพิวเตอร์)",
-                "คลาสสิกสไตล์ AutoCAD ครบชุด\nคลิกลากเลือกวัตถุ (Window Select)\nล้อเมาส์ ย่อขยาย พร้อมคีย์ลัด",
-            ),
-        ];
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(24.0);
 
-        let render_card = |ui: &mut egui::Ui, mode: DeviceMode, icon: &str, title: &str, desc: &str, card_w: f32| {
-            let is_current = app.canvas.device_mode == mode;
-            let card_bg = if is_current {
-                Color32::from_rgb(26, 42, 68)
-            } else {
-                Color32::from_rgb(30, 32, 38)
-            };
-            let stroke = if is_current {
-                Stroke::new(2.0, Color32::from_rgb(0, 150, 255))
-            } else {
-                Stroke::new(1.0, Color32::from_white_alpha(35))
-            };
-
-            let frame = egui::Frame::NONE
-                .fill(card_bg)
-                .stroke(stroke)
-                .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(12));
-
-            let response = frame.show(ui, |ui| {
-                ui.set_width(card_w);
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(icon).size(22.0));
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(title).size(14.0).strong().color(if is_current { Color32::from_rgb(0, 190, 255) } else { Color32::WHITE }));
+            // Optional top bar with "Back to Workspace" if opened while editing a document
+            if can_close {
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let back_btn = egui::Button::new(
+                            RichText::new("✕ กลับไปหน้าเขียนแบบ (Back to Workspace)")
+                                .size(13.0)
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_white_alpha(25))
+                        .min_size(vec2(160.0, 30.0));
+                        if ui.add(back_btn).clicked() {
+                            close = true;
+                        }
                     });
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(desc).size(11.5).color(Color32::from_rgb(200, 205, 215)));
-                    ui.add_space(10.0);
-                    let btn_text = if is_current { "✓ ใช้งานโหมดนี้" } else { "เลือกโหมดนี้" };
-                    let btn = egui::Button::new(RichText::new(btn_text).size(12.0).strong().color(Color32::WHITE))
-                        .fill(if is_current { Color32::from_rgb(0, 122, 255) } else { Color32::from_white_alpha(30) })
-                        .min_size(vec2(card_w - 24.0, 26.0));
-                    if ui.add(btn).clicked() {
-                        return true;
-                    }
-                    false
-                }).inner
-            });
-
-            response.inner
-        };
-
-        if is_compact {
-            ui.vertical(|ui| {
-                for (mode, icon, title, desc) in modes {
-                    if render_card(ui, mode, icon, title, desc, modal_w - 24.0) {
-                        selected_mode = Some(mode);
-                    }
-                    ui.add_space(8.0);
-                }
-            });
-        } else {
-            ui.horizontal(|ui| {
-                let card_w = (modal_w - 40.0) / 3.0;
-                for (mode, icon, title, desc) in modes {
-                    if render_card(ui, mode, icon, title, desc, card_w) {
-                        selected_mode = Some(mode);
-                    }
-                    ui.add_space(6.0);
-                }
-            });
-        }
-
-        ui.add_space(14.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add(egui::Button::new(RichText::new("เริ่มใช้งาน / Continue").strong().color(Color32::WHITE))
-                .fill(Color32::from_rgb(0, 122, 255))
-                .min_size(vec2(120.0, 28.0))).clicked()
-            {
-                close = true;
+                });
+                ui.add_space(8.0);
             }
-            ui.label(RichText::new("เปลี่ยนโหมดได้ตลอดเวลาจากเมนูด้านบน").size(11.5).color(t.text_dim));
+
+            // Header Section
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    RichText::new("📐 CADCraft")
+                        .size(15.0)
+                        .strong()
+                        .color(Color32::from_rgb(0, 190, 255)),
+                );
+                ui.add_space(6.0);
+                ui.heading(
+                    RichText::new("เลือกแพลตฟอร์มการใช้งาน / Select Platform")
+                        .size(24.0)
+                        .strong()
+                        .color(Color32::WHITE),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("ปรับแต่งเครื่องมือ เลย์เอาต์ และการควบคุมให้เหมาะสมกับอุปกรณ์ของคุณก่อนเข้าสู่หน้า Workspace")
+                        .size(13.5)
+                        .color(t.text_dim),
+                );
+                ui.add_space(26.0);
+            });
+
+            // 3 Platform Cards Definition
+            let cards = [
+                (
+                    DeviceMode::Phone,
+                    "📱",
+                    "Phone (มือถือ)",
+                    "สมาร์ตโฟนหน้าจอกะทัดรัด",
+                    "One-Hand Touch",
+                    Color32::from_rgb(20, 24, 32),
+                    Color32::from_rgb(0, 180, 220),
+                    false,
+                    [
+                        "📐 พื้นที่เขียนแบบเต็มตา: ซ่อนแถบเครื่องมือข้างจอ",
+                        "✋ เลื่อนจอด้วยนิ้วเดียว: เริ่มต้นด้วยโหมด Pan สะดวก",
+                        "🔢 แป้นสัมผัสกรอกระยะ: ลากแล้วปล่อยเปิด Floating Keypad",
+                        "⚡ เมนูลอยกะทัดรัด: Action Bar แนวนอน ไม่บังแบบ",
+                    ],
+                    "📱 เข้าสู่โหมด Phone →",
+                ),
+                (
+                    DeviceMode::Tablet,
+                    "📟 ✏️",
+                    "Tablet (iPad / ปากกา)",
+                    "iPad & แท็บเล็ตพร้อม Apple Pencil",
+                    "⭐ แนะนำสำหรับ iPad",
+                    Color32::from_rgb(20, 30, 48),
+                    Color32::from_rgb(0, 122, 255),
+                    true,
+                    [
+                        "✏️ ออกแบบสำหรับ Apple Pencil: ตรวจจับปากกาแม่นยำ",
+                        "📏 ลากเส้นแล้วหยุดใส่ค่า: ลากแล้วปล่อยเปิดแป้นตัวเลขทันที",
+                        "✌️ Gesture 2 นิ้ว: ซูม/แพนด้วย 2 นิ้ว พร้อมเขียนด้วยปากกา",
+                        "📂 ถาดเครื่องมือปรับได้: พับเก็บ/เปิด Tool Sets ได้ดั่งใจ",
+                    ],
+                    "📟 เข้าสู่โหมด Tablet →",
+                ),
+                (
+                    DeviceMode::Desktop,
+                    "💻",
+                    "Desktop (คอมพิวเตอร์)",
+                    "PC & Mac โน้ตบุ๊กและคอมตั้งโต๊ะ",
+                    "Mouse & Keyboard",
+                    Color32::from_rgb(20, 24, 32),
+                    Color32::from_rgb(160, 175, 200),
+                    false,
+                    [
+                        "🖥️ AutoCAD Classic: เปิด Tool Sets, Layers, Properties ครบ",
+                        "🖱️ คลิกลากเลือกวัตถุ: ลากเมาส์สร้าง Window Selection",
+                        "🎡 Scroll Wheel Navigation: ซูมด้วยล้อเมาส์ แพนปุ่มกลาง",
+                        "⌨️ คีย์ลัดเต็มรูปแบบ: Command Line 3 บรรทัด พิมพ์คำสั่ง CAD",
+                    ],
+                    "💻 เข้าสู่โหมด Desktop →",
+                ),
+            ];
+
+            let render_single_card = |ui: &mut egui::Ui, item: &(DeviceMode, &str, &str, &str, &str, Color32, Color32, bool, [&str; 4], &str), card_w: f32| -> Option<DeviceMode> {
+                let (mode, icon, title, subtitle, badge, bg_tint, accent_col, is_featured, features, btn_label) = *item;
+                let is_current = app.canvas.device_mode == mode;
+
+                let card_bg = if is_current {
+                    Color32::from_rgb(26, 40, 64)
+                } else {
+                    bg_tint
+                };
+                let border_stroke = if is_current || is_featured {
+                    Stroke::new(2.0, if is_current { Color32::from_rgb(0, 190, 255) } else { accent_col })
+                } else {
+                    Stroke::new(1.0, Color32::from_white_alpha(35))
+                };
+
+                let frame = egui::Frame::NONE
+                    .fill(card_bg)
+                    .stroke(border_stroke)
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(18));
+
+                let mut clicked_card = false;
+
+                frame.show(ui, |ui| {
+                    ui.set_width(card_w);
+                    ui.vertical(|ui| {
+                        // Badge / Tag at top
+                        ui.horizontal(|ui| {
+                            let badge_bg = if is_featured { Color32::from_rgb(0, 90, 200) } else { Color32::from_white_alpha(20) };
+                            let badge_frame = egui::Frame::NONE
+                                .fill(badge_bg)
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(8, 3));
+                            badge_frame.show(ui, |ui| {
+                                ui.label(RichText::new(badge).size(11.0).strong().color(Color32::WHITE));
+                            });
+
+                            if is_current {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(RichText::new("✓ กำลังใช้งาน").size(11.5).strong().color(Color32::from_rgb(0, 220, 130)));
+                                });
+                            }
+                        });
+
+                        ui.add_space(12.0);
+
+                        // Icon and Title
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon).size(30.0));
+                            ui.add_space(6.0);
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(title).size(16.5).strong().color(Color32::WHITE));
+                                ui.label(RichText::new(subtitle).size(11.5).color(Color32::from_rgb(180, 185, 195)));
+                            });
+                        });
+
+                        ui.add_space(14.0);
+                        ui.separator();
+                        ui.add_space(12.0);
+
+                        // Bullet Features
+                        for feat in features {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(feat).size(12.0).color(Color32::from_rgb(220, 225, 235)));
+                            });
+                            ui.add_space(6.0);
+                        }
+
+                        ui.add_space(16.0);
+
+                        // Big Action Button
+                        let btn_fill = if is_featured || is_current {
+                            Color32::from_rgb(0, 122, 255)
+                        } else {
+                            Color32::from_white_alpha(35)
+                        };
+                        let action_btn = egui::Button::new(
+                            RichText::new(btn_label)
+                                .size(13.0)
+                                .strong()
+                                .color(Color32::WHITE),
+                        )
+                        .fill(btn_fill)
+                        .min_size(vec2(card_w - 36.0, 36.0));
+
+                        if ui.add(action_btn).clicked() {
+                            clicked_card = true;
+                        }
+                    });
+                });
+
+                if clicked_card {
+                    Some(mode)
+                } else {
+                    None
+                }
+            };
+
+            if is_narrow {
+                ui.vertical_centered(|ui| {
+                    let card_w = (available_w - 32.0).clamp(280.0, 420.0);
+                    for item in &cards {
+                        if let Some(m) = render_single_card(ui, item, card_w) {
+                            chosen_mode = Some(m);
+                        }
+                        ui.add_space(16.0);
+                    }
+                });
+            } else {
+                ui.horizontal_top(|ui| {
+                    let total_cards_w = available_w.min(1060.0);
+                    let side_pad = ((available_w - total_cards_w) / 2.0).max(16.0);
+                    ui.add_space(side_pad);
+                    let card_w = ((total_cards_w - 48.0) / 3.0).clamp(240.0, 330.0);
+                    for item in &cards {
+                        if let Some(m) = render_single_card(ui, item, card_w) {
+                            chosen_mode = Some(m);
+                        }
+                        ui.add_space(16.0);
+                    }
+                });
+            }
+
+            ui.add_space(24.0);
+
+            // Footer Section
+            ui.vertical_centered(|ui| {
+                ui.checkbox(
+                    &mut app.canvas.auto_enter_workspace,
+                    RichText::new("จำตัวเลือกนี้ และเข้าสู่หน้า Workspace อัตโนมัติในครั้งถัดไป (Auto-enter workspace next time)")
+                        .size(12.5)
+                        .color(Color32::from_rgb(200, 205, 215)),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("คุณสามารถเปลี่ยนโหมดหรือกลับมาที่หน้านี้ได้ตลอดเวลา จากปุ่มบนแถบเครื่องมือด้านบน")
+                        .size(11.5)
+                        .color(t.text_dim),
+                );
+                ui.add_space(30.0);
+            });
         });
 
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            close = true;
-        }
-    });
-
-    if let Some(mode) = selected_mode {
+    if let Some(mode) = chosen_mode {
         app.apply_device_mode(mode);
+        app.canvas.show_platform_picker = false;
         app.canvas.show_device_modal = false;
-        ctx.request_repaint();
+        ui.ctx().request_repaint();
     } else if close {
+        app.canvas.show_platform_picker = false;
         app.canvas.show_device_modal = false;
-        ctx.request_repaint();
+        ui.ctx().request_repaint();
     }
 }
 

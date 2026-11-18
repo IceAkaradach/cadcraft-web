@@ -656,6 +656,16 @@ impl CadApp {
         let t0 = now_ms();
         control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();
+
+        // Full-screen Platform Card Selector before entering the workspace
+        if self.canvas.show_platform_picker {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(14, 16, 22))).show(ui, |ui| {
+                canvas::platform_card_selector(self, ui);
+            });
+            self.frame_ms = now_ms() - t0;
+            return;
+        }
+
         chrome::title_and_toolbar(self, ui);
         if self.ui.in_window_menu {
             menus::menu_bar(self, ui);
@@ -679,7 +689,6 @@ impl CadApp {
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
-        canvas::device_mode_modal(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

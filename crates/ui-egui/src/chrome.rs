@@ -195,8 +195,8 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             };
             let galley = ui.painter().layout_no_wrap(mode_text.into(), egui::FontId::proportional(11.5), t.text);
             ui.painter().galley(pos2(mode_rect.center().x - galley.size().x / 2.0, mode_rect.center().y - galley.size().y / 2.0), galley, t.text);
-            if mode_resp.on_hover_text(format!("Mode: {}\nClick to switch mode (Phone / Tablet / Desktop)", app.canvas.device_mode.label())).clicked() {
-                app.canvas.show_device_modal = true;
+            if mode_resp.on_hover_text(format!("Mode: {}\nClick to switch platform (Phone / Tablet / Desktop)", app.canvas.device_mode.label())).clicked() {
+                app.canvas.show_platform_picker = true;
             }
 
             if let Some(c) = clicked {
