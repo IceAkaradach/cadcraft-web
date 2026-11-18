@@ -367,6 +367,7 @@ impl CadApp {
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
+        self.canvas.pen_drag = None;
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             return;
         }

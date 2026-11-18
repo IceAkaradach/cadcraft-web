@@ -152,25 +152,8 @@ pub struct CanvasState {
     pub show_tablet_layers_drawer: bool,
     /// Whether to show the Tablet slide-over properties drawer.
     pub show_tablet_props_drawer: bool,
-    /// Non-blocking interactive dimension HUD tag from the last drawn segment.
-    pub dim_hud: Option<DimHudState>,
     /// Timestamp when multi-touch gesture was last active to prevent gesture conflicts.
     pub last_multi_touch_ms: f64,
-    /// Whether multi-touch gesture is currently active.
-    pub is_multi_touching: bool,
-}
-
-/// State for the non-blocking dimension HUD tag and on-demand keypad.
-#[derive(Clone, Debug)]
-pub struct DimHudState {
-    pub base: Vec2,
-    pub point: Vec2,
-    pub screen_pos: Pos2,
-    pub distance: f64,
-    pub angle_deg: f64,
-    pub show_keypad: bool,
-    pub keypad_input: String,
-    pub is_first_digit: bool,
 }
 
 /// Device experience mode for customized UI layout and touch/mouse logic.
@@ -213,9 +196,12 @@ pub struct PenDragState {
     pub base: Vec2,
     pub current_point: Vec2,
     pub screen_pos: Pos2,
+    pub distance: f64,
     pub angle_rad: f64,
     pub distance_input: String,
     pub is_first_digit: bool,
+    pub needs_first_point: bool,
+    pub is_paused: bool,
 }
 
 /// Touch navigation mode for responsive devices (Mobile, iPad, Tablet, PC/Mac).
@@ -1405,14 +1391,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.session.zoom_about(f64::from(zoom_pinch), xf.to_world(hp));
     }
     // Multi-touch gestures (two-finger pinch-zoom and pan for iPad, tablets, and smartphones)
+    let time_now = ui.input(|i| i.time);
     let has_multi_touch = ui.input(|i| i.multi_touch().is_some());
     if has_multi_touch {
-        app.canvas.last_multi_touch_ms = crate::now_ms();
-        app.canvas.is_multi_touching = true;
-    } else if crate::now_ms() - app.canvas.last_multi_touch_ms > 250.0 {
-        app.canvas.is_multi_touching = false;
+        app.canvas.last_multi_touch_ms = time_now;
     }
-    let is_multi_touching = app.canvas.is_multi_touching;
+    // Only suppress single-touch events when multi-touch is active or within 120ms of lifting
+    let is_multi_touching = has_multi_touch || (app.canvas.last_multi_touch_ms > 0.0 && time_now - app.canvas.last_multi_touch_ms < 0.12);
 
     if inside && let Some(multi_touch) = ui.input(|i| i.multi_touch()) {
         if (multi_touch.zoom_delta - 1.0).abs() > 0.001 {
@@ -1599,64 +1584,37 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let allow_touch_keypad = app.canvas.device_mode != DeviceMode::Desktop;
     let is_intentional_drag = press_origin.zip(hover_pos).map_or(false, |(orig, hp)| orig.distance(hp) > 14.0);
 
-    // Live measurement tag while dragging with Apple Pencil or finger
+    // Live measurement tag & pen_drag state while actively dragging with Apple Pencil or finger
     let is_dragging_draw = point_prompt && inside && resp.dragged_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching;
     if is_dragging_draw && let Some(hp) = hover_pos {
+        let needs_first_point = app.session.current_prompt().and_then(|p| p.base).is_none();
         let base_pt = app.session.current_prompt().and_then(|p| p.base).or_else(|| press_origin.map(|orig| xf.to_world(orig)));
         if let Some(base) = base_pt {
             let cur_w = effective_point(app, xf.to_world(hp), &xf, ui.ctx());
             let dist = base.dist(cur_w);
-            let angle = (cur_w.y - base.y).atan2(cur_w.x - base.x).to_degrees();
-            let live_rect = Rect::from_min_size(pos2(hp.x + 18.0, hp.y - 32.0), vec2(128.0, 24.0));
-            ui.painter().rect_filled(live_rect, 5.0, Color32::from_rgba_premultiplied(16, 22, 34, 235));
-            ui.painter().rect_stroke(live_rect, 5.0, Stroke::new(1.0, Color32::from_rgb(0, 180, 255)), egui::StrokeKind::Inside);
-            ui.painter().text(live_rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1} mm  {:.0}°", dist, angle), egui::FontId::proportional(11.5), Color32::WHITE);
+            let angle = (cur_w.y - base.y).atan2(cur_w.x - base.x);
+            let prev_input = app.canvas.pen_drag.as_ref().map(|p| p.distance_input.clone()).unwrap_or_else(|| format!("{:.1}", dist));
+            app.canvas.pen_drag = Some(PenDragState {
+                base,
+                current_point: cur_w,
+                screen_pos: hp,
+                distance: dist,
+                angle_rad: angle,
+                distance_input: prev_input,
+                is_first_digit: true,
+                needs_first_point,
+                is_paused: false,
+            });
         }
     }
 
-    // Drag-to-dimension release: Place point cleanly and surface non-blocking Dimension HUD
+    // Drag-to-dimension release: PAUSE and prompt for precision keypad! (Wait for user input, DO NOT auto-commit!)
     if allow_touch_keypad && point_prompt && inside && resp.drag_stopped_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching {
-        let orig = press_origin.unwrap_or(rect.center());
-        let end_hp = hover_pos.unwrap_or(orig);
-        let end_w = effective_point(app, xf.to_world(end_hp), &xf, ui.ctx());
-
-        if let Some(base) = app.session.current_prompt().and_then(|p| p.base) {
-            let dist = base.dist(end_w);
-            let angle = (end_w.y - base.y).atan2(end_w.x - base.x);
-            let result = match app.canvas.snap {
-                Some(hit) => app.session.input_snapped(hit),
-                None => app.session.input(Input::Point(end_w)),
-            };
-            if let Err(e) = result {
-                app.session.echo(e.to_string());
+        if let Some(state) = &mut app.canvas.pen_drag {
+            state.is_paused = true;
+            if let Some(hp) = hover_pos {
+                state.screen_pos = hp;
             }
-            app.canvas.dim_hud = Some(DimHudState {
-                base,
-                point: end_w,
-                screen_pos: end_hp,
-                distance: dist,
-                angle_deg: angle.to_degrees(),
-                show_keypad: false,
-                keypad_input: format!("{:.2}", dist),
-                is_first_digit: true,
-            });
-        } else {
-            // First point at drag start, second at drag end
-            let first_world = effective_point(app, xf.to_world(orig), &xf, ui.ctx());
-            let _ = app.session.input(Input::Point(first_world));
-            let dist = first_world.dist(end_w);
-            let angle = (end_w.y - first_world.y).atan2(end_w.x - first_world.x);
-            let _ = app.session.input(Input::Point(end_w));
-            app.canvas.dim_hud = Some(DimHudState {
-                base: first_world,
-                point: end_w,
-                screen_pos: end_hp,
-                distance: dist,
-                angle_deg: angle.to_degrees(),
-                show_keypad: false,
-                keypad_input: format!("{:.2}", dist),
-                is_first_digit: true,
-            });
         }
     }
 
@@ -2118,7 +2076,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if app.canvas.device_mode == DeviceMode::Desktop {
         viewport_navigation_bar(app, ui, rect);
     }
-    smart_dim_hud(app, ui, rect);
+    pen_drag_overlay(app, ui, rect);
 
     // Platform-specific overlays and interactive tools
     match app.canvas.device_mode {
@@ -2942,156 +2900,278 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
         });
 }
 
-fn smart_dim_hud(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let Some(mut state) = app.canvas.dim_hud.clone() else { return };
-    let mut close = false;
-    let mut apply = false;
+fn pen_drag_overlay(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let Some(mut state) = app.canvas.pen_drag.clone() else { return };
+    let mut confirm = false;
+    let mut cancel = false;
 
-    let hud_w = if state.show_keypad { 240.0 } else { 290.0 };
-    // Position: floating above the bottom snap bar or mobile bar
-    let bottom_offset = if state.show_keypad { 280.0 } else { 88.0 };
-    let hud_pos = pos2(
-        (rect.center().x - hud_w / 2.0).clamp(rect.left() + 10.0, rect.right() - hud_w - 10.0),
-        rect.bottom() - bottom_offset,
-    );
+    if !state.is_paused {
+        // --- WHILE DRAGGING (ขณะกำลังลาก) ---
+        // 1. Follower capsule near the pencil tip
+        let tag_w = 145.0;
+        let tag_h = 28.0;
+        let tag_pos = pos2(
+            (state.screen_pos.x + 18.0).min(rect.right() - tag_w - 10.0).max(rect.left() + 10.0),
+            (state.screen_pos.y - 36.0).min(rect.bottom() - tag_h - 10.0).max(rect.top() + 45.0),
+        );
 
-    egui::Area::new(egui::Id::new("smart_dim_hud_area"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(hud_pos)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::NONE
-                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 245))
-                .stroke(Stroke::new(1.2, Color32::from_rgb(0, 160, 255)))
-                .corner_radius(egui::CornerRadius::same(12))
-                .inner_margin(egui::Margin::symmetric(10, 8))
-                .show(ui, |ui| {
-                    ui.set_width(hud_w);
-                    ui.vertical(|ui| {
-                        // Header pill: shows distance & angle
+        egui::Area::new(egui::Id::new("live_drag_tag_area"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(tag_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgba_premultiplied(16, 22, 34, 235))
+                    .stroke(Stroke::new(1.2, Color32::from_rgb(0, 180, 255)))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        let text = format!("📏 {:.1} mm  ∠ {:.0}°", state.distance, state.angle_rad.to_degrees());
+                        ui.label(RichText::new(text).font(egui::FontId::proportional(12.0)).strong().color(Color32::WHITE));
+                    });
+            });
+
+        // 2. Interactive Quick Dimension Bar (แก้ไขได้ระหว่างลาก!)
+        // Docked at top-center (below prompt pill), easily reachable by second thumb/hand
+        let bar_w = 420.0;
+        let bar_pos = pos2(
+            (rect.center().x - bar_w / 2.0).clamp(rect.left() + 10.0, rect.right() - bar_w - 10.0),
+            rect.top() + 72.0,
+        );
+
+        egui::Area::new(egui::Id::new("live_drag_quick_bar_area"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(bar_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgba_premultiplied(18, 24, 36, 240))
+                    .stroke(Stroke::new(1.2, Color32::from_rgb(0, 160, 255)))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let text = format!("📏 {:.2} mm  •  {:.1}°", state.distance, state.angle_deg);
-                            ui.label(RichText::new(text).font(egui::FontId::proportional(12.5)).strong().color(Color32::WHITE));
+                            ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+                            ui.label(
+                                RichText::new(format!("📏 {:.1}", state.distance))
+                                    .font(egui::FontId::proportional(12.5))
+                                    .strong()
+                                    .color(Color32::from_rgb(0, 210, 255)),
+                            );
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button(RichText::new("✕").size(12.0).color(Color32::from_white_alpha(150))).clicked() {
-                                    close = true;
-                                }
-                                if !state.show_keypad {
-                                    let edit_btn = egui::Button::new(
-                                        RichText::new("✏️ ปรับขนาด")
-                                            .font(egui::FontId::proportional(11.5))
-                                            .color(Color32::from_rgb(0, 210, 255)),
-                                    )
-                                    .fill(Color32::from_rgb(0, 60, 110));
+                            for preset in [50.0, 100.0, 200.0, 500.0, 1000.0] {
+                                let label = format!("{:.0}", preset);
+                                let btn = egui::Button::new(RichText::new(label).font(egui::FontId::proportional(11.5)))
+                                    .fill(Color32::from_white_alpha(20))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .min_size(vec2(44.0, 24.0));
 
-                                    if ui.add(edit_btn).clicked() {
-                                        state.show_keypad = true;
-                                    }
+                                if ui.add(btn).clicked() {
+                                    state.distance = preset;
+                                    state.distance_input = format!("{:.1}", preset);
+                                    let rad = state.angle_rad;
+                                    state.current_point = state.base + Vec2::new(preset * rad.cos(), preset * rad.sin());
+                                    state.is_paused = true;
                                 }
-                            });
+                            }
+
+                            let pause_btn = egui::Button::new(
+                                RichText::new("✏️ กำหนดขนาด")
+                                    .font(egui::FontId::proportional(11.5))
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 100, 190))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .min_size(vec2(76.0, 24.0));
+
+                            if ui.add(pause_btn).clicked() {
+                                state.is_paused = true;
+                            }
                         });
+                    });
+            });
+    } else {
+        // --- WHEN PAUSED (หยุดเพื่อใส่ค่าตัวเลข) ---
+        let popup_w = 260.0;
+        let popup_h = 280.0;
+        let px = (state.screen_pos.x + 12.0).min(rect.right() - popup_w - 12.0).max(rect.left() + 12.0);
+        let py = (state.screen_pos.y - 140.0).min(rect.bottom() - popup_h - 48.0).max(rect.top() + 45.0);
+        let popup_pos = pos2(px, py);
 
-                        // Expanded keypad if user tapped "ปรับขนาด"
-                        if state.show_keypad {
-                            ui.separator();
+        egui::Area::new(egui::Id::new("pen_drag_keypad_area"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(popup_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgba_premultiplied(20, 26, 38, 250))
+                    .stroke(Stroke::new(1.5, Color32::from_rgb(0, 140, 255)))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.set_width(popup_w - 20.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                            // Header row: Title & Angle indicator
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("ระยะ:").font(egui::FontId::proportional(12.0)).color(Color32::from_white_alpha(160)));
-                                let edit_frame = egui::Frame::NONE
-                                    .fill(Color32::from_black_alpha(180))
-                                    .stroke(Stroke::new(1.0, Color32::from_rgb(0, 180, 255)))
-                                    .corner_radius(egui::CornerRadius::same(4))
-                                    .inner_margin(egui::Margin::symmetric(6, 3));
-                                edit_frame.show(ui, |ui| {
-                                    ui.set_width(120.0);
-                                    ui.label(RichText::new(&state.keypad_input).font(egui::FontId::monospace(14.0)).strong().color(Color32::WHITE));
+                                ui.label(
+                                    RichText::new("📏 ระบุระยะความยาว")
+                                        .font(egui::FontId::proportional(13.0))
+                                        .strong()
+                                        .color(Color32::from_rgb(0, 210, 255)),
+                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(RichText::new("✕").size(12.0).color(Color32::GRAY)).clicked() {
+                                        cancel = true;
+                                    }
+                                    let deg = (state.angle_rad.to_degrees() * 10.0).round() / 10.0;
+                                    ui.label(RichText::new(format!("∠ {deg}°")).font(egui::FontId::proportional(11.5)).color(Color32::from_rgb(255, 190, 0)));
                                 });
-                                if ui.button(RichText::new("⌫").size(12.0)).clicked() {
-                                    state.keypad_input.pop();
+                            });
+
+                            // Display value box
+                            ui.horizontal(|ui| {
+                                let box_frame = egui::Frame::NONE
+                                    .fill(Color32::from_black_alpha(200))
+                                    .stroke(Stroke::new(1.0, Color32::from_rgb(0, 180, 255)))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(8, 4));
+
+                                box_frame.show(ui, |ui| {
+                                    ui.set_width(popup_w - 62.0);
+                                    let display_str = if state.distance_input.is_empty() { "0" } else { &state.distance_input };
+                                    ui.label(RichText::new(display_str).font(egui::FontId::monospace(15.0)).strong().color(Color32::WHITE));
+                                });
+
+                                let del_btn = egui::Button::new(RichText::new("⌫").font(egui::FontId::proportional(13.0)))
+                                    .fill(Color32::from_rgb(50, 30, 35))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .min_size(vec2(28.0, 26.0));
+                                if ui.add(del_btn).clicked() {
+                                    state.distance_input.pop();
+                                    state.is_first_digit = false;
                                 }
                             });
 
-                            ui.add_space(4.0);
-                            // Presets
+                            // Quick preset increments
                             ui.horizontal(|ui| {
-                                for delta in [100.0, 500.0, 1000.0] {
-                                    let label = format!("+{:.0}", delta);
-                                    if ui.add(egui::Button::new(RichText::new(label).size(11.0)).min_size(vec2(48.0, 22.0))).clicked() {
-                                        let current = state.keypad_input.parse::<f64>().unwrap_or(state.distance);
-                                        state.keypad_input = format!("{:.2}", current + delta);
+                                ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+                                for inc in [50.0, 100.0, 500.0, 1000.0] {
+                                    let label = format!("+{:.0}", inc);
+                                    let btn = egui::Button::new(RichText::new(label).font(egui::FontId::proportional(11.0)))
+                                        .fill(Color32::from_white_alpha(20))
+                                        .corner_radius(egui::CornerRadius::same(5))
+                                        .min_size(vec2(44.0, 22.0));
+                                    if ui.add(btn).clicked() {
+                                        let current = state.distance_input.trim().parse::<f64>().unwrap_or(state.distance);
+                                        state.distance_input = format!("{:.1}", current + inc);
+                                        state.is_first_digit = false;
                                     }
                                 }
                             });
 
-                            ui.add_space(4.0);
-                            // Num grid
+                            // Numpad 4x3
                             let num_buttons = [
                                 ["7", "8", "9"],
                                 ["4", "5", "6"],
                                 ["1", "2", "3"],
                                 ["0", ".", "C"],
                             ];
+                            let cell_w = (popup_w - 30.0) / 3.0;
                             for row in num_buttons {
                                 ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
                                     for digit in row {
-                                        let btn = egui::Button::new(RichText::new(digit).font(egui::FontId::proportional(13.0)))
-                                            .min_size(vec2(52.0, 26.0));
+                                        let btn = egui::Button::new(RichText::new(digit).font(egui::FontId::proportional(14.0)))
+                                            .fill(Color32::from_white_alpha(25))
+                                            .corner_radius(egui::CornerRadius::same(6))
+                                            .min_size(vec2(cell_w, 28.0));
                                         if ui.add(btn).clicked() {
                                             if digit == "C" {
-                                                state.keypad_input.clear();
+                                                state.distance_input.clear();
+                                                state.is_first_digit = false;
                                             } else if digit == "." {
-                                                if !state.keypad_input.contains('.') {
-                                                    state.keypad_input.push('.');
+                                                if !state.distance_input.contains('.') {
+                                                    state.distance_input.push('.');
+                                                    state.is_first_digit = false;
                                                 }
                                             } else {
                                                 if state.is_first_digit {
-                                                    state.keypad_input.clear();
+                                                    state.distance_input.clear();
                                                     state.is_first_digit = false;
                                                 }
-                                                state.keypad_input.push_str(digit);
+                                                state.distance_input.push_str(digit);
                                             }
                                         }
                                     }
                                 });
                             }
 
-                            ui.add_space(6.0);
-                            // Action buttons
+                            ui.add_space(3.0);
+                            // Action buttons: Confirm and Cancel
                             ui.horizontal(|ui| {
-                                let apply_btn = egui::Button::new(
-                                    RichText::new("↵ นำไปใช้ (Apply)")
-                                        .font(egui::FontId::proportional(12.5))
+                                let ok_btn = egui::Button::new(
+                                    RichText::new("↵ ตกลง / วางเส้น")
+                                        .font(egui::FontId::proportional(13.0))
                                         .strong()
                                         .color(Color32::WHITE),
                                 )
-                                .fill(Color32::from_rgb(0, 140, 70))
-                                .min_size(vec2(hud_w - 20.0, 30.0));
+                                .fill(Color32::from_rgb(0, 140, 75))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .min_size(vec2(popup_w - 75.0, 32.0));
 
-                                if ui.add(apply_btn).clicked() {
-                                    apply = true;
+                                if ui.add(ok_btn).clicked() {
+                                    confirm = true;
+                                }
+
+                                let esc_btn = egui::Button::new(
+                                    RichText::new("✕")
+                                        .font(egui::FontId::proportional(13.0))
+                                        .color(Color32::from_rgb(255, 140, 140)),
+                                )
+                                .fill(Color32::from_rgb(60, 25, 30))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .min_size(vec2(38.0, 32.0));
+
+                                if ui.add(esc_btn).clicked() {
+                                    cancel = true;
                                 }
                             });
-                        }
+                        });
                     });
-                });
-        });
+            });
+    }
 
-    if apply {
-        if let Ok(new_dist) = state.keypad_input.parse::<f64>() {
-            if new_dist > 0.0 {
-                let rad = state.angle_deg.to_radians();
-                let new_pt = state.base + Vec2::new(new_dist * rad.cos(), new_dist * rad.sin());
-                // Rewind last point and place new adjusted point
-                let _ = app.session.undo();
-                let _ = app.session.input(Input::Point(new_pt));
+    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        confirm = true;
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        cancel = true;
+    }
+
+    if confirm {
+        if let Ok(d) = state.distance_input.trim().parse::<f64>() {
+            if d > 0.0 {
+                let rad = state.angle_rad;
+                let final_point = state.base + Vec2::new(d * rad.cos(), d * rad.sin());
+                if state.needs_first_point {
+                    let _ = app.session.input(Input::Point(state.base));
+                }
+                let res = match app.canvas.snap {
+                    Some(hit) => app.session.input_snapped(hit),
+                    None => app.session.input(Input::Point(final_point)),
+                };
+                if let Err(e) = res {
+                    app.session.echo(e.to_string());
+                }
             }
         }
-        app.canvas.dim_hud = None;
+        app.canvas.pen_drag = None;
         ui.ctx().request_repaint();
-    } else if close {
-        app.canvas.dim_hud = None;
+    } else if cancel {
+        app.canvas.pen_drag = None;
         ui.ctx().request_repaint();
     } else {
-        app.canvas.dim_hud = Some(state);
+        app.canvas.pen_drag = Some(state);
     }
 }
 
