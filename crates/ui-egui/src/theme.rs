@@ -376,6 +376,9 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
         data.index = face.index;
         added.push(("korean-ui".into(), std::sync::Arc::new(data)));
     }
+    // Thai font for Thai glyph coverage across all platforms including WebAssembly
+    const THAI_FONT: &[u8] = include_bytes!("NotoSansThai.ttf");
+    added.push(("thai-ui".into(), std::sync::Arc::new(egui::FontData::from_static(THAI_FONT))));
     for (name, data) in added {
         fonts.font_data.insert(name.clone(), data);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {

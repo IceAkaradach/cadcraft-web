@@ -3116,12 +3116,12 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
                     ui.add_space(24.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let back_btn = egui::Button::new(
-                            RichText::new("✕ กลับไปหน้าเขียนแบบ (Back to Workspace)")
+                            RichText::new("✕ Back to Workspace (กลับไปหน้าเขียนแบบ)")
                                 .size(13.0)
                                 .color(Color32::WHITE),
                         )
                         .fill(Color32::from_white_alpha(25))
-                        .min_size(vec2(160.0, 30.0));
+                        .min_size(vec2(180.0, 30.0));
                         if ui.add(back_btn).clicked() {
                             close = true;
                         }
@@ -3133,22 +3133,22 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
             // Header Section
             ui.vertical_centered(|ui| {
                 ui.label(
-                    RichText::new("📐 CADCraft")
+                    RichText::new("CADCraft")
                         .size(15.0)
                         .strong()
                         .color(Color32::from_rgb(0, 190, 255)),
                 );
                 ui.add_space(6.0);
                 ui.heading(
-                    RichText::new("เลือกแพลตฟอร์มการใช้งาน / Select Platform")
-                        .size(24.0)
+                    RichText::new("Select Your Platform / เลือกแพลตฟอร์มการใช้งาน")
+                        .size(23.0)
                         .strong()
                         .color(Color32::WHITE),
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("ปรับแต่งเครื่องมือ เลย์เอาต์ และการควบคุมให้เหมาะสมกับอุปกรณ์ของคุณก่อนเข้าสู่หน้า Workspace")
-                        .size(13.5)
+                    RichText::new("Choose your device to optimize layout, tools, and touch controls before entering workspace\n(ปรับแต่งเครื่องมือ เลย์เอาต์ และการควบคุมให้เหมาะสมกับอุปกรณ์ของคุณก่อนเข้าสู่หน้า Workspace)")
+                        .size(13.0)
                         .color(t.text_dim),
                 );
                 ui.add_space(26.0);
@@ -3158,59 +3158,59 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
             let cards = [
                 (
                     DeviceMode::Phone,
-                    "📱",
-                    "Phone (มือถือ)",
-                    "สมาร์ตโฟนหน้าจอกะทัดรัด",
-                    "One-Hand Touch",
+                    "[ MOBILE ]",
+                    "Phone (โหมดมือถือ)",
+                    "For Smartphones / สมาร์ตโฟน",
+                    "Touch / One-Hand",
                     Color32::from_rgb(20, 24, 32),
                     Color32::from_rgb(0, 180, 220),
                     false,
                     [
-                        "📐 พื้นที่เขียนแบบเต็มตา: ซ่อนแถบเครื่องมือข้างจอ",
-                        "✋ เลื่อนจอด้วยนิ้วเดียว: เริ่มต้นด้วยโหมด Pan สะดวก",
-                        "🔢 แป้นสัมผัสกรอกระยะ: ลากแล้วปล่อยเปิด Floating Keypad",
-                        "⚡ เมนูลอยกะทัดรัด: Action Bar แนวนอน ไม่บังแบบ",
+                        "• Full Screen Canvas: ซ่อนแถบเครื่องมือ เพิ่มพื้นที่วาดรูปเต็มตา",
+                        "• 1-Finger Pan: ใช้นิ้วเดียวเลื่อนดูแบบแปลนได้อย่างคล่องตัว",
+                        "• Touch Keypad: ลากเส้นแล้วปล่อยเพื่อเปิดแป้นกรอกระยะลอยตัว",
+                        "• Compact Action Bar: แถบเครื่องมือแนวนอนลอยตัว ไม่บังแบบ",
                     ],
-                    "📱 เข้าสู่โหมด Phone →",
+                    "Select Phone Mode →",
                 ),
                 (
                     DeviceMode::Tablet,
-                    "📟 ✏️",
-                    "Tablet (iPad / ปากกา)",
-                    "iPad & แท็บเล็ตพร้อม Apple Pencil",
-                    "⭐ แนะนำสำหรับ iPad",
+                    "[ TABLET ]",
+                    "Tablet (โหมดแท็บเล็ต / iPad)",
+                    "For iPad & Stylus / แท็บเล็ตพร้อมปากกา",
+                    "Recommended for iPad",
                     Color32::from_rgb(20, 30, 48),
                     Color32::from_rgb(0, 122, 255),
                     true,
                     [
-                        "✏️ ออกแบบสำหรับ Apple Pencil: ตรวจจับปากกาแม่นยำ",
-                        "📏 ลากเส้นแล้วหยุดใส่ค่า: ลากแล้วปล่อยเปิดแป้นตัวเลขทันที",
-                        "✌️ Gesture 2 นิ้ว: ซูม/แพนด้วย 2 นิ้ว พร้อมเขียนด้วยปากกา",
-                        "📂 ถาดเครื่องมือปรับได้: พับเก็บ/เปิด Tool Sets ได้ดั่งใจ",
+                        "• Apple Pencil & Stylus: เขียนแบบด้วยปากกา สัมผัสแม่นยำ",
+                        "• Drag to Dimension: ลากเส้นแล้วปล่อยเพื่อหยุดใส่ค่าระยะทันที",
+                        "• 2-Finger Gestures: แพนและซูมด้วย 2 นิ้ว พร้อมเขียนด้วยปากกา",
+                        "• Collapsible Drawers: ถาดเครื่องมือด้านข้าง พับเก็บได้ดั่งใจ",
                     ],
-                    "📟 เข้าสู่โหมด Tablet →",
+                    "Select Tablet Mode →",
                 ),
                 (
                     DeviceMode::Desktop,
-                    "💻",
-                    "Desktop (คอมพิวเตอร์)",
-                    "PC & Mac โน้ตบุ๊กและคอมตั้งโต๊ะ",
+                    "[ DESKTOP ]",
+                    "Desktop (โหมดคอมพิวเตอร์)",
+                    "For PC & Mac Workstations / คอมตั้งโต๊ะ",
                     "Mouse & Keyboard",
                     Color32::from_rgb(20, 24, 32),
                     Color32::from_rgb(160, 175, 200),
                     false,
                     [
-                        "🖥️ AutoCAD Classic: เปิด Tool Sets, Layers, Properties ครบ",
-                        "🖱️ คลิกลากเลือกวัตถุ: ลากเมาส์สร้าง Window Selection",
-                        "🎡 Scroll Wheel Navigation: ซูมด้วยล้อเมาส์ แพนปุ่มกลาง",
-                        "⌨️ คีย์ลัดเต็มรูปแบบ: Command Line 3 บรรทัด พิมพ์คำสั่ง CAD",
+                        "• AutoCAD Classic: พาเนล Tool Sets, Layers, Properties ครบ",
+                        "• Window Selection: คลิกลากเมาส์สร้างกรอบเลือกวัตถุมาตรฐาน",
+                        "• Scroll Wheel Zoom: ซูมด้วยล้อเมาส์ และแพนด้วยคลิกปุ่มกลาง",
+                        "• Full Command Line: Typed CAD commands & คีย์ลัดเต็มระบบ",
                     ],
-                    "💻 เข้าสู่โหมด Desktop →",
+                    "Select Desktop Mode →",
                 ),
             ];
 
             let render_single_card = |ui: &mut egui::Ui, item: &(DeviceMode, &str, &str, &str, &str, Color32, Color32, bool, [&str; 4], &str), card_w: f32| -> Option<DeviceMode> {
-                let (mode, icon, title, subtitle, badge, bg_tint, accent_col, is_featured, features, btn_label) = *item;
+                let (mode, icon_badge, title, subtitle, badge, bg_tint, accent_col, is_featured, features, btn_label) = *item;
                 let is_current = app.canvas.device_mode == mode;
 
                 let card_bg = if is_current {
@@ -3248,7 +3248,7 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
 
                             if is_current {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.label(RichText::new("✓ กำลังใช้งาน").size(11.5).strong().color(Color32::from_rgb(0, 220, 130)));
+                                    ui.label(RichText::new("Active (กำลังใช้งาน)").size(11.5).strong().color(Color32::from_rgb(0, 220, 130)));
                                 });
                             }
                         });
@@ -3257,10 +3257,16 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
 
                         // Icon and Title
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(icon).size(30.0));
+                            let icon_frame = egui::Frame::NONE
+                                .fill(Color32::from_white_alpha(20))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .inner_margin(egui::Margin::symmetric(8, 4));
+                            icon_frame.show(ui, |ui| {
+                                ui.label(RichText::new(icon_badge).size(12.0).strong().color(if is_featured { Color32::from_rgb(0, 200, 255) } else { Color32::WHITE }));
+                            });
                             ui.add_space(6.0);
                             ui.vertical(|ui| {
-                                ui.label(RichText::new(title).size(16.5).strong().color(Color32::WHITE));
+                                ui.label(RichText::new(title).size(15.5).strong().color(Color32::WHITE));
                                 ui.label(RichText::new(subtitle).size(11.5).color(Color32::from_rgb(180, 185, 195)));
                             });
                         });
@@ -3338,13 +3344,13 @@ pub fn platform_card_selector(app: &mut CadApp, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 ui.checkbox(
                     &mut app.canvas.auto_enter_workspace,
-                    RichText::new("จำตัวเลือกนี้ และเข้าสู่หน้า Workspace อัตโนมัติในครั้งถัดไป (Auto-enter workspace next time)")
-                        .size(12.5)
+                    RichText::new("Remember my choice & auto-enter workspace next time\n(จำตัวเลือกนี้ และเข้าสู่หน้า Workspace อัตโนมัติในครั้งถัดไป)")
+                        .size(12.0)
                         .color(Color32::from_rgb(200, 205, 215)),
                 );
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("คุณสามารถเปลี่ยนโหมดหรือกลับมาที่หน้านี้ได้ตลอดเวลา จากปุ่มบนแถบเครื่องมือด้านบน")
+                    RichText::new("You can switch platforms anytime from the toolbar button at the top.\n(คุณสามารถเปลี่ยนโหมดหรือกลับมาที่หน้านี้ได้ตลอดเวลา จากปุ่มบนแถบเครื่องมือด้านบน)")
                         .size(11.5)
                         .color(t.text_dim),
                 );
