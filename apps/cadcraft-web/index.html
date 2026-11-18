@@ -2,14 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CADCraft">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#22282f">
+  <meta name="format-detection" content="telephone=no">
   <title>CADCraft</title>
   <link data-trunk rel="rust" data-bin="cadcraft-web" data-wasm-opt="z" data-weak-refs />
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #22282f; }
-    #cadcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-    #cadcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      color: #b8b8b8; font: 14px system-ui, sans-serif; pointer-events: none; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #22282f;
+      touch-action: none;
+      overscroll-behavior: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #cadcraft_canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      touch-action: none;
+      outline: none;
+    }
+    #cadcraft_loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #b8b8b8;
+      font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>

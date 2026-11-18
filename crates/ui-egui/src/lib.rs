@@ -160,7 +160,7 @@ impl Default for UiState {
             interface_language: i18n::Preference::default(),
             show_toolsets: true,
             show_palettes: true,
-            palette_tab: 0,
+            palette_tab: 1,
             show_toolbar: true,
             show_file_tabs: true,
             show_status_bar: true,

@@ -327,7 +327,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     // Keep the canonical workspace accessible while rendering an immutable snapshot.
     app.ui.docking = workspace.clone();
     let mut style = DockStyle::from_ui(ui);
-    style.min_pane = 96.0;
+    style.min_pane = if ui.available_width() < 600.0 { 60.0 } else { 96.0 };
     style.background = t.panel;
     style.tab_background = t.chrome;
     style.active_background = t.tab_active;
@@ -390,10 +390,10 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
 
 fn panel_limits(panel: &Panel) -> PanelLimits {
     let (min, max_width) = match panel {
-        Panel::Canvas => (egui::vec2(300.0, 180.0), 1_000_000.0),
-        Panel::QuickCalc => (egui::vec2(240.0, 160.0), 600.0),
-        Panel::ToolSets => (egui::vec2(220.0, 150.0), 480.0),
-        Panel::Layers | Panel::Properties | Panel::ExternalRefs => (egui::vec2(220.0, 100.0), 720.0),
+        Panel::Canvas => (egui::vec2(80.0, 80.0), 1_000_000.0),
+        Panel::QuickCalc => (egui::vec2(180.0, 140.0), 600.0),
+        Panel::ToolSets => (egui::vec2(160.0, 120.0), 480.0),
+        Panel::Layers | Panel::Properties | Panel::ExternalRefs => (egui::vec2(160.0, 80.0), 720.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

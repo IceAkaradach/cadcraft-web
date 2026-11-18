@@ -132,6 +132,17 @@ pub struct CanvasState {
     pub orbit_state: Option<crate::orbit3d::Orbit3dState>,
     pub view_name: String,
     pub visual_style_name: String,
+    /// Touch navigation mode for mobile, tablet, and flexible interaction.
+    pub touch_nav_mode: TouchNavMode,
+}
+
+/// Touch navigation mode for responsive devices (Mobile, iPad, Tablet, PC/Mac).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TouchNavMode {
+    #[default]
+    Draw,
+    Pan,
+    Orbit,
 }
 
 impl CanvasState {
@@ -1311,6 +1322,38 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     {
         let _ = app.session.zoom_about(f64::from(zoom_pinch), xf.to_world(hp));
     }
+    // Multi-touch gestures (two-finger pinch-zoom and pan for iPad, tablets, and smartphones)
+    if inside {
+        if let Some(multi_touch) = ui.input(|i| i.multi_touch()) {
+            if (multi_touch.zoom_delta - 1.0).abs() > 0.001 {
+                let center_world = xf.to_world(multi_touch.center_pos);
+                let _ = app.session.zoom_about(f64::from(multi_touch.zoom_delta), center_world);
+                if let Some(st) = &mut app.canvas.orbit_state {
+                    st.zoom = (st.zoom * multi_touch.zoom_delta).clamp(0.01, 1000.0);
+                }
+                ui.ctx().request_repaint();
+            }
+            let d = multi_touch.translation_delta;
+            if d.length_sq() > 0.04 {
+                if app.canvas.is_3d {
+                    let st = app.canvas.orbit_state.get_or_insert_with(Default::default);
+                    if multi_touch.rotation_delta.abs() > 0.005 {
+                        st.yaw += multi_touch.rotation_delta;
+                    }
+                    st.pan_x += d.x;
+                    st.pan_y += d.y;
+                    ui.ctx().request_repaint();
+                } else if let Ok(st) = app.session.state_mut() {
+                    let v = st.view();
+                    st.set_view_quiet(cadcraft_engine::View {
+                        center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
+                        height: v.height,
+                    });
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
     // Pan with the middle button (or Shift+middle-drag is 3D Orbit, like AutoCAD).
     let middle_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
     let focused = ui.input(|i| i.focused);
@@ -1351,6 +1394,33 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // ZOOM Realtime: dragging up zooms in, down zooms out.
     if resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
         let _ = app.session.realtime_zoom(f64::from(resp.drag_delta().y));
+    }
+    // Touch Navigation Mode: Single-finger / primary drag for Pan or 3D Orbit
+    if resp.dragged_by(egui::PointerButton::Primary) && inside {
+        if app.canvas.touch_nav_mode == TouchNavMode::Pan {
+            let d = resp.drag_delta();
+            if app.canvas.is_3d {
+                let st = app.canvas.orbit_state.get_or_insert_with(Default::default);
+                st.pan_x += d.x;
+                st.pan_y += d.y;
+                ui.ctx().request_repaint();
+            } else if let Ok(st) = app.session.state_mut() {
+                let v = st.view();
+                st.set_view_quiet(cadcraft_engine::View {
+                    center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
+                    height: v.height,
+                });
+                ui.ctx().request_repaint();
+            }
+        } else if app.canvas.touch_nav_mode == TouchNavMode::Orbit {
+            let d = resp.drag_delta();
+            app.canvas.is_3d = true;
+            let st = app.canvas.orbit_state.get_or_insert_with(Default::default);
+            st.yaw += d.x * 0.01;
+            st.pitch = (st.pitch + d.y * 0.01).clamp(-1.54, 1.54);
+            app.canvas.view_name = "Custom 3D View".to_string();
+            ui.ctx().request_repaint();
+        }
     }
     // A click in another tile makes it current (or answers -VPORTS Join's prompts).
     if pressed_primary
@@ -1432,6 +1502,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // and eframe hands a slow frame's clicks over together, which egui reports as one.
     let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
         && app.session.pending_window.is_none()
+        && app.canvas.touch_nav_mode == TouchNavMode::Draw
         && !app.session.realtime_zoom_active();
     let pressed_primary = pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
     if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
@@ -1573,6 +1644,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
     if resp.drag_started_by(egui::PointerButton::Primary)
         && !app.canvas.is_3d
+        && app.canvas.touch_nav_mode == TouchNavMode::Draw
         && !middle_down
         && app.session.pending_window.is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
@@ -1882,6 +1954,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_controls(app, ui, rect);
+    viewport_navigation_bar(app, ui, rect);
     // Typing and Escape reach the command line even when its overlay is hidden.
     crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
@@ -2523,6 +2596,137 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                     },
                 );
             });
+        });
+}
+
+fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = Tokens::get();
+    let is_narrow = rect.width() < 600.0;
+
+    // Position: bottom right on mobile/narrow screens, right-center edge on tablet/desktop (AutoCAD style)
+    let at = if is_narrow {
+        pos2((rect.center().x - 145.0).max(rect.left() + 8.0), rect.bottom() - 44.0)
+    } else {
+        pos2(rect.right() - 46.0, rect.top() + 80.0)
+    };
+
+    egui::Area::new(egui::Id::new("canvas_navigation_bar_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .show(ui.ctx(), |ui| {
+            let bg_color = Color32::from_black_alpha(200);
+            let stroke = Stroke::new(1.0, Color32::from_white_alpha(40));
+            let corner = egui::CornerRadius::same(6);
+
+            egui::Frame::NONE
+                .fill(bg_color)
+                .stroke(stroke)
+                .corner_radius(corner)
+                .inner_margin(egui::Margin::same(3))
+                .show(ui, |ui| {
+                    let draw_buttons = |ui: &mut egui::Ui| {
+                        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+
+                        // 1. Select & Draw mode
+                        let draw_active = app.canvas.touch_nav_mode == TouchNavMode::Draw;
+                        let draw_btn = egui::Button::new(
+                            RichText::new("↖")
+                                .font(egui::FontId::proportional(15.0))
+                                .color(if draw_active { Color32::WHITE } else { t.text_dim }),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(if draw_active { Color32::from_rgb(0, 122, 255) } else { Color32::TRANSPARENT });
+                        if ui.add(draw_btn).on_hover_text("Select & Draw Mode (Tap to draw)").clicked() {
+                            app.canvas.touch_nav_mode = TouchNavMode::Draw;
+                        }
+
+                        // 2. Pan mode
+                        let pan_active = app.canvas.touch_nav_mode == TouchNavMode::Pan;
+                        let pan_btn = egui::Button::new(
+                            RichText::new("✋")
+                                .font(egui::FontId::proportional(13.0))
+                                .color(if pan_active { Color32::WHITE } else { t.text_dim }),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(if pan_active { Color32::from_rgb(0, 122, 255) } else { Color32::TRANSPARENT });
+                        if ui.add(pan_btn).on_hover_text("Pan Mode (Drag to pan view)").clicked() {
+                            app.canvas.touch_nav_mode = if pan_active { TouchNavMode::Draw } else { TouchNavMode::Pan };
+                        }
+
+                        // 3. 3D Orbit mode
+                        let orbit_active = app.canvas.touch_nav_mode == TouchNavMode::Orbit;
+                        let orbit_btn = egui::Button::new(
+                            RichText::new("🔄")
+                                .font(egui::FontId::proportional(13.0))
+                                .color(if orbit_active { Color32::WHITE } else { t.text_dim }),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(if orbit_active { Color32::from_rgb(0, 122, 255) } else { Color32::TRANSPARENT });
+                        if ui.add(orbit_btn).on_hover_text("3D Orbit Mode (Drag to rotate 3D)").clicked() {
+                            app.canvas.touch_nav_mode = if orbit_active { TouchNavMode::Draw } else { TouchNavMode::Orbit };
+                            app.canvas.is_3d = true;
+                        }
+
+                        // 4. Zoom Extents
+                        let fit_btn = egui::Button::new(
+                            RichText::new("⛶")
+                                .font(egui::FontId::proportional(14.0))
+                                .color(t.text_dim),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(Color32::TRANSPARENT);
+                        if ui.add(fit_btn).on_hover_text("Zoom Extents (Fit drawing)").clicked() {
+                            let _ = app.session.zoom_extents();
+                        }
+
+                        // 5. 2D Top view quick switch (if in 3D)
+                        if app.canvas.is_3d {
+                            let top_btn = egui::Button::new(
+                                RichText::new("⬆")
+                                    .font(egui::FontId::proportional(13.0))
+                                    .color(Color32::from_rgb(255, 180, 0)),
+                            )
+                            .min_size(vec2(28.0, 26.0))
+                            .fill(Color32::TRANSPARENT);
+                            if ui.add(top_btn).on_hover_text("Reset to 2D Top View").clicked() {
+                                app.canvas.view_name = "Top".into();
+                                app.canvas.is_3d = false;
+                                app.canvas.touch_nav_mode = TouchNavMode::Draw;
+                                let _ = app.session.zoom_extents();
+                            }
+                        }
+
+                        // 6. Toggle ToolSets Drawer
+                        let tools_btn = egui::Button::new(
+                            RichText::new("▦")
+                                .font(egui::FontId::proportional(14.0))
+                                .color(if app.ui.show_toolsets { Color32::from_rgb(0, 190, 120) } else { t.text_dim }),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(Color32::TRANSPARENT);
+                        if ui.add(tools_btn).on_hover_text("Toggle Tool Sets Panel").clicked() {
+                            app.ui.show_toolsets = !app.ui.show_toolsets;
+                        }
+
+                        // 7. Toggle Properties / Layers Drawer
+                        let prop_btn = egui::Button::new(
+                            RichText::new("⚙")
+                                .font(egui::FontId::proportional(13.0))
+                                .color(if app.ui.show_palettes { Color32::from_rgb(0, 190, 120) } else { t.text_dim }),
+                        )
+                        .min_size(vec2(28.0, 26.0))
+                        .fill(Color32::TRANSPARENT);
+                        if ui.add(prop_btn).on_hover_text("Toggle Properties / Layers").clicked() {
+                            app.ui.show_palettes = !app.ui.show_palettes;
+                        }
+                    };
+
+                    if is_narrow {
+                        ui.horizontal(draw_buttons);
+                    } else {
+                        ui.vertical(draw_buttons);
+                    }
+                });
         });
 }
 

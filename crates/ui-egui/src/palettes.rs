@@ -321,8 +321,8 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
         p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), tab_h)), 0.0, t.chrome);
         let tabs = [
             (Icon::Layers, "Layers"),
-            (Icon::Blocks, "Smart Blocks"),
             (Icon::Properties, "Properties"),
+            (Icon::Blocks, "Smart Blocks"),
             (Icon::List, "Count"),
             (Icon::Measure, "Activity & Measure"),
         ];
@@ -356,8 +356,8 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 match app.ui.palette_tab {
                     0 => layers_section(app, ui),
-                    1 => smart_blocks_section(app, ui),
-                    2 => properties_section(app, ui),
+                    1 => properties_section(app, ui),
+                    2 => smart_blocks_section(app, ui),
                     3 => count_section(app, ui),
                     _ => activity_insights_section(app, ui),
                 }
