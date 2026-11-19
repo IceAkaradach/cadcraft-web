@@ -1588,25 +1588,36 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Live measurement tag & pen_drag state while actively dragging with Apple Pencil or finger
     let is_dragging_draw = point_prompt && inside && resp.dragged_by(egui::PointerButton::Primary) && is_intentional_drag && !is_multi_touching;
     if is_dragging_draw && let Some(hp) = hover_pos {
-        let needs_first_point = app.session.current_prompt().and_then(|p| p.base).is_none();
-        let base_pt = app.session.current_prompt().and_then(|p| p.base).or_else(|| press_origin.map(|orig| xf.to_world(orig)));
-        if let Some(base) = base_pt {
-            let cur_w = effective_point(app, xf.to_world(hp), &xf, ui.ctx());
-            let dist = base.dist(cur_w);
-            let angle = (cur_w.y - base.y).atan2(cur_w.x - base.x);
-            let prev_input = app.canvas.pen_drag.as_ref().map(|p| p.distance_input.clone()).unwrap_or_else(|| format!("{:.1}", dist));
-            app.canvas.pen_drag = Some(PenDragState {
-                base,
-                current_point: cur_w,
-                screen_pos: hp,
-                distance: dist,
-                angle_rad: angle,
-                distance_input: prev_input,
-                is_first_digit: true,
-                needs_first_point,
-                is_paused: false,
-            });
-        }
+        let (base, needs_first_point) = match (app.session.current_prompt().and_then(|p| p.base), press_origin) {
+            (Some(prev), Some(orig)) => {
+                let prev_screen = xf.to_screen(prev);
+                if prev_screen.distance(orig) < 28.0 {
+                    // Touched near previous endpoint: chain continuously from previous point!
+                    (prev, false)
+                } else {
+                    // Touched away from previous endpoint: start a FRESH new line from touch origin!
+                    (xf.to_world(orig), true)
+                }
+            }
+            (Some(prev), None) => (prev, false),
+            (None, Some(orig)) => (xf.to_world(orig), true),
+            (None, None) => (xf.to_world(hp), true),
+        };
+        let cur_w = effective_point(app, xf.to_world(hp), &xf, ui.ctx());
+        let dist = base.dist(cur_w);
+        let angle = (cur_w.y - base.y).atan2(cur_w.x - base.x);
+        let prev_input = app.canvas.pen_drag.as_ref().map(|p| p.distance_input.clone()).unwrap_or_else(|| format!("{:.1}", dist));
+        app.canvas.pen_drag = Some(PenDragState {
+            base,
+            current_point: cur_w,
+            screen_pos: hp,
+            distance: dist,
+            angle_rad: angle,
+            distance_input: prev_input,
+            is_first_digit: true,
+            needs_first_point,
+            is_paused: false,
+        });
     }
 
     // Drag-to-dimension release: PAUSE and prompt for precision keypad! (Wait for user input, DO NOT auto-commit!)
@@ -2089,7 +2100,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if app.canvas.device_mode == DeviceMode::Desktop {
         viewport_navigation_bar(app, ui, rect);
     }
-    pen_drag_overlay(app, ui, rect);
+    pen_drag_overlay(app, ui, rect, &xf);
 
     // Platform-specific overlays and interactive tools
     match app.canvas.device_mode {
@@ -2913,10 +2924,27 @@ fn viewport_navigation_bar(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
         });
 }
 
-fn pen_drag_overlay(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
+fn pen_drag_overlay(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, xf: &Xf) {
     let Some(mut state) = app.canvas.pen_drag.clone() else { return };
     let mut confirm = false;
     let mut cancel = false;
+
+    // Draw high-visibility live vector preview directly under the pen / touch gesture
+    let p0 = xf.to_screen(state.base);
+    let p1 = xf.to_screen(state.current_point);
+    let painter = ui.painter_at(rect);
+
+    // Subtle drop shadow for high contrast on light or dark drawings
+    painter.line_segment([p0, p1], Stroke::new(4.5, Color32::from_black_alpha(110)));
+    // Sharp, vibrant CAD vector line
+    painter.line_segment([p0, p1], Stroke::new(2.4, Color32::from_rgb(0, 195, 255)));
+
+    // Origin anchor dot (cyan dot with white ring)
+    painter.circle_filled(p0, 4.5, Color32::from_rgb(0, 195, 255));
+    painter.circle_stroke(p0, 4.5, Stroke::new(1.2, Color32::WHITE));
+
+    // Endpoint cursor indicator (yellow ring)
+    painter.circle_stroke(p1, 5.5, Stroke::new(1.8, Color32::from_rgb(255, 215, 0)));
 
     if !state.is_paused {
         // --- WHILE DRAGGING (ขณะกำลังลาก) ---
@@ -3170,6 +3198,12 @@ fn pen_drag_overlay(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                 let rad = state.angle_rad;
                 let final_point = state.base + Vec2::new(d * rad.cos(), d * rad.sin());
                 if state.needs_first_point {
+                    // If the session was chaining from a previous continuous point, end that chain cleanly first
+                    if app.session.current_prompt().and_then(|p| p.base).is_some() {
+                        let running_id = app.session.running.as_ref().map(|r| r.id.clone()).unwrap_or_else(|| "line".into());
+                        let _ = app.session.input(Input::Enter);
+                        app.start(&running_id);
+                    }
                     let _ = app.session.input(Input::Point(state.base));
                 }
                 let res = match app.canvas.snap {
@@ -3537,15 +3571,18 @@ fn tablet_pencil_palette(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
                             ("📐", "dimlinear", "บอกขนาด (Dimension)"),
                         ];
 
+                        let running_cmd = app.session.running.as_ref().map(|r| r.id.to_lowercase());
                         for (icon, cmd, tip) in pencil_tools {
+                            let is_active = running_cmd.as_deref() == Some(cmd);
                             let btn = egui::Button::new(
                                 RichText::new(icon)
                                     .font(egui::FontId::proportional(15.0))
-                                    .color(t.text),
+                                    .color(if is_active { Color32::WHITE } else { t.text }),
                             )
                             .min_size(vec2(38.0, 34.0))
                             .corner_radius(egui::CornerRadius::same(8))
-                            .fill(Color32::from_white_alpha(15));
+                            .stroke(if is_active { Stroke::new(1.2, Color32::from_rgb(0, 200, 255)) } else { Stroke::NONE })
+                            .fill(if is_active { Color32::from_rgb(0, 100, 200) } else { Color32::from_white_alpha(15) });
 
                             if ui.add(btn).on_hover_text(tip).clicked() {
                                 app.start(cmd);

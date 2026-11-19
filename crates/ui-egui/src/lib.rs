@@ -335,6 +335,9 @@ impl CadApp {
                 self.canvas.touch_nav_mode = canvas::TouchNavMode::Draw;
                 self.session.settings.pickbox = 16.0;
                 self.session.settings.gripsize = 9.0;
+                if self.session.running.is_none() {
+                    self.start("line");
+                }
             }
             canvas::DeviceMode::Desktop => {
                 let _ = self.ui.docking.set_visible(docking::Panel::ToolSets, true);
